@@ -1,0 +1,1 @@
+{ "name": "path-links", "version": "0.1.0", "description": "Turn file paths in Claude's replies into file:// links that ctrl+click opens with xdg-open" }
