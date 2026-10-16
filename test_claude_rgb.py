@@ -306,11 +306,14 @@ def test_slotmap_tolerates_bad_file(tmp_path):
 
 def test_held_ids_keeps_live_and_grace_sessions_in_arrival_order():
     now = 10_000.0
-    live_new = sess(id="new", file_mtime=now - 1)
-    live_old = sess(id="old", file_mtime=now - 5000, fresh=False, blocked=True)
-    grace = sess(id="grace", file_mtime=now - 60, fresh=False)
-    dead = sess(id="dead", file_mtime=now - 3600, fresh=False)
-    assert cr.held_ids([live_new, dead, grace, live_old], now) == ["old", "grace", "new"]
+    live_new = sess(id="new", pane="%1", file_mtime=now - 1)
+    live_old = sess(id="old", pane="%2", file_mtime=now - 5000, fresh=False, blocked=True)
+    grace = sess(id="grace", pane="%3", file_mtime=now - 40, fresh=False)
+    nopane = sess(id="nopane", pane=None, file_mtime=now - 40, fresh=False)
+    dead = sess(id="dead", pane="%4", file_mtime=now - 3600, fresh=False)
+    closed = sess(id="closed", pane="%9", file_mtime=now - 5, fresh=False)   # pane vanished
+    panes = {"%1", "%2", "%3", "%4"}
+    assert cr.held_ids([live_new, dead, grace, nopane, live_old, closed], now, panes) == ["old", "grace", "nopane", "new"]
 
 
 def test_slot_views_follow_state_focus_and_grace(tmp_path):

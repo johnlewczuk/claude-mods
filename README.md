@@ -64,7 +64,8 @@ Everything counts as seen at daemon start, so a restart is not a wall of blue.
 Slots are keyed by session_id, first free wins, and persisted in
 `~/.local/state/claude-rgb/slots.json` so a daemon restart does not reshuffle
 them. A slot is held while the session is live (fresh statusline or blocked
-on a dialog) and for 10 min after, then released. A 13th session gets no slot
+on a dialog) and for 60 s after; a session whose tmux pane is gone is
+released at once. A 13th session gets no slot
 until one frees. Each session's statusline shows its key as `⌨3`; the daemon
 writes `$XDG_RUNTIME_DIR/claude-rgb/slots/<session_id>` for that.
 

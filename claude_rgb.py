@@ -78,7 +78,7 @@ ALARM_AT = 90
 _BELOW = ["Key: Tab"] + [f"Key: {c}" for c in "QWERTYUIOP"] + ["Key: [", "Key: ]"]
 TRIANGLE = {key: (_BELOW[i], _BELOW[i + 1]) for i, key in enumerate(SLOT_KEYS)}
 BUSY_MAX_AGE = 15 * 60   # a transcript silent this long is not mid-turn
-SLOT_GRACE = 10 * 60     # a slot outlives its session's last statusline write by this
+SLOT_GRACE = 60          # a slot outlives its session's last statusline write by this
 UNFOCUSED_DIM = 0.65
 
 # A Claude Code dialog (permission, AskUserQuestion, plan approval, folder
@@ -417,12 +417,14 @@ class SlotMap:
         os.replace(tmp, self.path)
 
 
-def held_ids(sessions: list[Session], now: float) -> list[str]:
-    """Sessions that keep (or get) a slot: live ones, plus recently-dead ones
-    for a grace period so a restart or hiccup does not reshuffle keys.
-    Ordered by first appearance (file mtime is useless; session_id order is
-    arbitrary): oldest transcript activity first keeps it deterministic."""
-    keep = [s for s in sessions if s.live or now - s.file_mtime <= SLOT_GRACE]
+def held_ids(sessions: list[Session], now: float, live_panes: Collection[str]) -> list[str]:
+    """Sessions that keep (or get) a slot: live ones, plus ones that went
+    quiet within the grace period so a statusline hiccup does not reshuffle
+    keys. A session whose tmux pane no longer exists is gone for certain and
+    is released at once. Ordered oldest first so allocation is deterministic."""
+    def present(s: Session) -> bool:
+        return s.pane is None or s.pane in live_panes
+    keep = [s for s in sessions if s.live or (present(s) and now - s.file_mtime <= SLOT_GRACE)]
     return [s.id for s in sorted(keep, key=lambda s: s.file_mtime)]
 
 
@@ -556,8 +558,9 @@ def main() -> int:
                 focus = focused_pane()
                 if focus:
                     viewed[focus] = wall
-                sessions = load_sessions(state_dir, max_age, wall, pane_has_dialog, live_panes())
-                if slots.update(held_ids(sessions, wall)):
+                panes = live_panes()
+                sessions = load_sessions(state_dir, max_age, wall, pane_has_dialog, panes)
+                if slots.update(held_ids(sessions, wall, panes)):
                     print(f"claude-rgb: slots {slots.slots}", flush=True)
                 write_slot_labels(state_dir, slots)
                 stats = stats_from(sessions, focus, slot_views(sessions, slots, focus, viewed, started))
