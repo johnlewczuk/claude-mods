@@ -58,7 +58,7 @@ RED: Colour = (220, 0, 0)
 ORANGE: Colour = (255, 70, 0)
 BLUE: Colour = (0, 90, 255)
 SLOT_UNREAD: Colour = (90, 190, 255)   # ice blue, steady (blocked is deep blue, breathing)
-SLOT_GREY: Colour = (70, 70, 85)
+SLOT_GREY: Colour = (130, 130, 150)
 
 MODEL_COLOURS: dict[str, Colour] = {
     "fable": (150, 0, 200),
