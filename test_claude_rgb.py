@@ -96,17 +96,17 @@ def test_slot_keys_show_state_colours_and_focus_brightness():
     k1, k2, k3, k4, k5 = (idx(f"Key: {c}") for c in "12345")
     assert a[k1][0] > a[k1][2] and a[k1] != b[k1]              # orange, breathing
     assert a[k2][2] > a[k2][0] and a[k2] != b[k2]              # blue, breathing
-    assert a[k3] == cr.scaled(cr.SLOT_WHITE, cr.UNFOCUSED_DIM)   # white, dimmed (not focused)
+    assert a[k3] == cr.scaled(cr.SLOT_UNREAD, cr.UNFOCUSED_DIM)   # ice blue, dimmed (not focused)
     assert a[k4] == cr.scaled(cr.SLOT_GREY, cr.UNFOCUSED_DIM)
     assert a[k5] == cr.BASE                                    # empty slot
     focused_unread = cr.render(NAMES, stats(slots=((State.UNREAD, True),)), t=0.0)
-    assert focused_unread[k1] == cr.SLOT_WHITE
+    assert focused_unread[k1] == cr.SLOT_UNREAD
 
 
 def test_focused_slot_lights_the_two_keys_below_it_as_a_triangle():
     views = ((State.IDLE, False), (State.UNREAD, True), (State.IDLE, False))
     f = cr.render(NAMES, stats(slots=views), t=0.0)
-    assert f[idx("Key: Q")] == cr.SLOT_WHITE and f[idx("Key: W")] == cr.SLOT_WHITE   # under "2"
+    assert f[idx("Key: Q")] == cr.SLOT_UNREAD and f[idx("Key: W")] == cr.SLOT_UNREAD   # under "2"
     assert f[idx("Key: Tab")] == cr.BASE and f[idx("Key: E")] == cr.BASE          # not under "2"
     assert f[idx("Key: 1")] == cr.scaled(cr.SLOT_GREY, cr.UNFOCUSED_DIM)
     first = cr.render(NAMES, stats(slots=((State.IDLE, True),)), t=0.0)

@@ -32,7 +32,7 @@ shortcuts (the lighting works without either).
 | Keys          | Stat                        | Colour                         |
 |---------------|-----------------------------|--------------------------------|
 | F1..F12       | context window used %       | green, amber >=60, red >=80    |
-| 1..0 - =      | one Claude session per key ("slot"); Ctrl+Alt+<key> jumps to it | orange breathing = working, blue breathing = blocked on you, white = finished since you last looked, grey = idle/seen, off = empty. Focused session full brightness, others dim |
+| 1..0 - =      | one Claude session per key ("slot"); Ctrl+Alt+<key> jumps to it | orange breathing = working, blue breathing = blocked on you, ice blue (steady) = finished since you last looked, grey = idle/seen, off = empty. Focused session full brightness, others dim |
 | Tab,Q..P,[,]  | the two keys under the focused session's slot key light in its colour, forming a triangle | |
 | numpad 1..9,0 | 5-hour rate limit used %    | cyan, amber >=70, red >=90     |
 | Ins Home PgUp Del End PgDn | 7-day rate limit used % | violet, amber >=50, red >=80 |
@@ -56,9 +56,9 @@ at 2 Hz. Claude Code freezes the statusline while a dialog is up, so a
 blocked session's mirror file goes stale; it still counts as long as its
 tmux pane exists and shows the dialog.
 
-"Finished since you last looked" (white) uses the daemon's own focus
+"Finished since you last looked" (ice blue) uses the daemon's own focus
 tracking: the pane's transcript changed after the pane was last focused.
-Everything counts as seen at daemon start, so a restart is not a wall of white.
+Everything counts as seen at daemon start, so a restart is not a wall of blue.
 
 ## Slots and Ctrl+Alt+<key>
 Slots are keyed by session_id, first free wins, and persisted in

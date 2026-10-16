@@ -15,7 +15,7 @@ Layout (Razer Cynosa Chroma, but any keyboard with OpenRGB key names works):
                 session's lifetime, Ctrl+Alt+<key> jumps to its tmux pane):
                   orange breathing  working (mid-turn)
                   blue breathing    blocked on you (permission, question, ...)
-                  white             finished since you last looked at it
+                  ice blue          finished since you last looked at it
                   grey              idle, seen
                   off               no session in this slot
                 the focused session's key is at full brightness, others dim,
@@ -57,7 +57,7 @@ AMBER: Colour = (200, 110, 0)
 RED: Colour = (220, 0, 0)
 ORANGE: Colour = (255, 70, 0)
 BLUE: Colour = (0, 90, 255)
-SLOT_WHITE: Colour = (255, 255, 255)
+SLOT_UNREAD: Colour = (90, 190, 255)   # ice blue, steady (blocked is deep blue, breathing)
 SLOT_GREY: Colour = (70, 70, 85)
 
 MODEL_COLOURS: dict[str, Colour] = {
@@ -203,7 +203,7 @@ def slot_colour(view: Optional[SlotView], t: float) -> Colour:
     elif state is State.BLOCKED:
         c = scaled(BLUE, 0.5 + 0.5 * breathe(t, 1.5))
     elif state is State.UNREAD:
-        c = SLOT_WHITE
+        c = SLOT_UNREAD
     else:
         c = SLOT_GREY
     return c if focused else scaled(c, UNFOCUSED_DIM)
