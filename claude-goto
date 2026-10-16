@@ -1,0 +1,20 @@
+#!/bin/bash
+# claude-goto <slot-label>: jump the terminal to the tmux pane of the Claude
+# session that owns this keyboard slot (see claude_rgb.py). Bound to
+# Ctrl+Alt+<key> as a GNOME global shortcut, so it works from any window:
+# gnome-terminal collapses Ctrl+Alt+<digit> to Alt+<digit>, which is why
+# this is not a tmux binding.
+set -u
+label=${1:?slot label}
+slots=${CLAUDE_RGB_SLOTS:-${XDG_STATE_HOME:-$HOME/.local/state}/claude-rgb/slots.json}
+state=${CLAUDE_RGB_STATE_DIR:-${XDG_RUNTIME_DIR:-/tmp}/claude-rgb}
+
+sid=$(jq -r --arg k "$label" '.slots[$k] // empty' "$slots" 2>/dev/null) || exit 0
+[ -n "$sid" ] || exit 0                                  # empty slot: nothing to do
+pane=$(jq -r '.tmux_pane // empty' "$state/$sid.json" 2>/dev/null)
+[ -n "$pane" ] || exit 0
+
+# switch-client -t <pane> changes session, window and pane of the most
+# recently used client; then bring that terminal window to the front.
+tmux switch-client -t "$pane" 2>/dev/null || exit 0
+wmctrl -xa gnome-terminal-server.Gnome-terminal 2>/dev/null || true
