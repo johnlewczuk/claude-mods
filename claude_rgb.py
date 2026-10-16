@@ -431,7 +431,7 @@ def slot_views(sessions: list[Session], slots: SlotMap, focus: Optional[str],
     """What each slot key shows. `viewed` maps pane -> when it was last
     focused; a pane never focused since the daemon started counts as viewed
     at `default_viewed` (daemon start), so a restart does not light every
-    idle session white. A session in its grace period (not live) is idle."""
+    idle session unread-blue. A session in its grace period (not live) is idle."""
     by_id = {s.id: s for s in sessions}
     out: list[Optional[SlotView]] = []
     for label in SLOT_LABELS:
