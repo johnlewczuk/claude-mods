@@ -33,12 +33,11 @@ shortcuts (the lighting works without either).
 |---------------|-----------------------------|--------------------------------|
 | F1..F12       | context window used %       | green, amber >=60, red >=80    |
 | 1..0 - =      | one Claude session per key ("slot"); Ctrl+Alt+<key> jumps to it | orange breathing = working, blue breathing = blocked on you, white = finished since you last looked, grey = idle/seen, off = empty. Focused session full brightness, others dim |
+| Tab,Q..P,[,]  | the two keys under the focused session's slot key light in its colour, forming a triangle | |
 | numpad 1..9,0 | 5-hour rate limit used %    | cyan, amber >=70, red >=90     |
 | Ins Home PgUp Del End PgDn | 7-day rate limit used % | violet, amber >=50, red >=80 |
 | Logo          | model                       | Fable violet, Opus amber, Sonnet teal, Haiku green |
 | Escape        | alarm (any stat >= 90 %)    | red; all other keys pulse red  |
-| Q..P,L,M..Z,A | focused session mid-turn    | orange comet, 8 keys/s, 5-key tail |
-| same ring     | focused session blocked on you (permission, question, plan approval) | whole ring breathes blue |
 | rest          | idle base                   | near-off; faint grey = unknown |
 
 No fresh session for 30 s -> everything near-off, dim logo.

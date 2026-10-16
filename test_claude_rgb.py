@@ -7,7 +7,7 @@ import claude_rgb as cr
 from claude_rgb import State
 
 NAMES = ["", "Key: Escape", ""] + [f"Key: F{i}" for i in range(1, 13)] + ["Logo"] + cr.SLOT_KEYS + [
-    "Key: A"] + cr.NUMPAD + cr.NAV + [f"Key: {c}" for c in "QWERTYUIOPSDFGHJKLZXCVBNM"]
+    "Key: A", "Key: Tab", "Key: [", "Key: ]"] + cr.NUMPAD + cr.NAV + [f"Key: {c}" for c in "QWERTYUIOP"]
 
 
 def idx(name):
@@ -15,7 +15,7 @@ def idx(name):
 
 
 def stats(**kw):
-    s = dict(ctx=None, h5=None, d7=None, model=None, busy=False, waiting=False, slots=())
+    s = dict(ctx=None, h5=None, d7=None, model=None, slots=())
     s.update(kw)
     return cr.Stats(**s)
 
@@ -86,32 +86,6 @@ def test_idle_frame_is_all_base_with_dim_logo():
     assert len(frame) == len(NAMES)
 
 
-# --- ring -------------------------------------------------------------------
-
-def test_spinner_runs_around_alphabet_ring_when_busy():
-    busy = stats(ctx=10, busy=True)
-    f0 = cr.render(NAMES, busy, t=0.0)
-    assert f0[idx("Key: Q")] == cr.ORANGE
-    assert f0[idx("Key: W")] == cr.BASE
-    assert f0[idx("Key: G")] == cr.BASE
-    f1 = cr.render(NAMES, busy, t=1.0 / cr.SPIN_HZ)
-    assert f1[idx("Key: W")] == cr.ORANGE
-    q = f1[idx("Key: Q")]
-    assert q != cr.BASE and q != cr.ORANGE and q[0] > q[2]
-    assert cr.render(NAMES, busy, t=len(cr.RING) / cr.SPIN_HZ)[idx("Key: Q")] == cr.ORANGE
-    assert cr.render(NAMES, stats(ctx=10), t=0.0)[idx("Key: Q")] == cr.BASE
-
-
-def test_waiting_turns_ring_into_pulsing_blue_not_spinner():
-    w = stats(ctx=10, busy=True, waiting=True)
-    a = cr.render(NAMES, w, t=0.0)
-    b = cr.render(NAMES, w, t=0.5)
-    for key in cr.RING:
-        assert a[idx(key)][2] > a[idx(key)][0]
-    assert a[idx("Key: Q")] != b[idx("Key: Q")]
-    assert a[idx("Key: Q")] == a[idx("Key: M")]
-
-
 # --- slot keys ----------------------------------------------------------------
 
 def test_slot_keys_show_state_colours_and_focus_brightness():
@@ -127,6 +101,37 @@ def test_slot_keys_show_state_colours_and_focus_brightness():
     assert a[k5] == cr.BASE                                    # empty slot
     focused_unread = cr.render(NAMES, stats(slots=((State.UNREAD, True),)), t=0.0)
     assert focused_unread[k1] == cr.SLOT_WHITE
+
+
+def test_focused_slot_lights_the_two_keys_below_it_as_a_triangle():
+    views = ((State.IDLE, False), (State.UNREAD, True), (State.IDLE, False))
+    f = cr.render(NAMES, stats(slots=views), t=0.0)
+    assert f[idx("Key: Q")] == cr.SLOT_WHITE and f[idx("Key: W")] == cr.SLOT_WHITE   # under "2"
+    assert f[idx("Key: Tab")] == cr.BASE and f[idx("Key: E")] == cr.BASE          # not under "2"
+    assert f[idx("Key: 1")] == cr.scaled(cr.SLOT_GREY, cr.UNFOCUSED_DIM)
+    first = cr.render(NAMES, stats(slots=((State.IDLE, True),)), t=0.0)
+    assert first[idx("Key: Tab")] == cr.SLOT_GREY and first[idx("Key: Q")] == cr.SLOT_GREY
+    last = cr.render(NAMES, stats(slots=(None,) * 11 + ((State.IDLE, True),)), t=0.0)
+    assert last[idx("Key: [")] == cr.SLOT_GREY and last[idx("Key: ]")] == cr.SLOT_GREY
+    nothing = cr.render(NAMES, stats(slots=((State.IDLE, False),)), t=0.0)
+    assert nothing[idx("Key: Q")] == cr.BASE
+
+
+def test_pick_stats_busy_and_waiting(tmp_path):
+    """Blocked / working are per-session facts, surfaced via slot views."""
+    now = time.time()
+    tf, ti = tmp_path / "f.jsonl", tmp_path / "i.jsonl"
+    tf.write_text(jl(ASSIST_TOOL)); ti.write_text(jl(ASSIST_END, TURN_DONE))
+    write(tmp_path / "f.json", tf, tmux_pane="%1")
+    write(tmp_path / "i.json", ti, tmux_pane="%3")
+    asked = []
+    def dialog_open(pane):
+        asked.append(pane)
+        return pane == "%1"
+    sessions = cr.load_sessions(str(tmp_path), 30, now, dialog_open, {"%1", "%3"})
+    by = {x.id: x for x in sessions}
+    assert (by["f"].busy, by["f"].blocked, by["i"].busy, by["i"].blocked) == (True, True, False, False)
+    assert "%3" not in asked                       # idle sessions are never screen-scraped
 
 
 # --- transcript ---------------------------------------------------------------
@@ -233,25 +238,6 @@ def test_pick_stats_ignores_stale_missing_and_half_written(tmp_path):
     assert cr.pick_stats(str(tmp_path), max_age=30).ctx == 11
 
 
-def test_pick_stats_busy_and_waiting(tmp_path):
-    now = time.time()
-    tf, to, ti = (tmp_path / f"{n}.jsonl" for n in ("f", "o", "i"))
-    tf.write_text(jl(ASSIST_TOOL)); to.write_text(jl(ASSIST_TOOL)); ti.write_text(jl(ASSIST_END, TURN_DONE))
-    write(tmp_path / "f.json", tf, tmux_pane="%1", context_window={"used_percentage": 5})
-    write(tmp_path / "o.json", to, tmux_pane="%2")
-    write(tmp_path / "i.json", ti, tmux_pane="%3")
-    asked = []
-    def dialog_open(pane):
-        asked.append(pane)
-        return pane in ("%1", "%2")
-    panes = {"%1", "%2", "%3"}
-    s = cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%1", dialog_open=dialog_open, live_panes=panes)
-    assert (s.busy, s.waiting) == (True, True)
-    assert "%3" not in asked                       # idle sessions are never screen-scraped
-    s = cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%3", dialog_open=dialog_open, live_panes=panes)
-    assert (s.busy, s.waiting) == (False, False)
-
-
 def test_blocked_session_with_frozen_statusline_still_counts(tmp_path):
     """Claude Code stops refreshing the statusline while a dialog is open."""
     now = time.time()
@@ -262,7 +248,7 @@ def test_blocked_session_with_frozen_statusline_still_counts(tmp_path):
     os.utime(tmp_path / "b.json", (now - 600, now - 600))
     dialog_open = lambda pane: pane == "%2"
     s = cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%2", dialog_open=dialog_open, live_panes={"%1", "%2"})
-    assert (s.ctx, s.waiting) == (77, True)
+    assert s.ctx == 77
     s = cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%1", dialog_open=dialog_open, live_panes={"%1"})
     assert s.ctx == 5
     sessions = cr.load_sessions(str(tmp_path), 30, now, dialog_open, {"%1"})

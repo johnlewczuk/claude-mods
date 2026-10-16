@@ -18,14 +18,13 @@ Layout (Razer Cynosa Chroma, but any keyboard with OpenRGB key names works):
                   white             finished since you last looked at it
                   grey              idle, seen
                   off               no session in this slot
-                the focused session's key is at full brightness, others dim
+                the focused session's key is at full brightness, others dim,
+                and the two keys straddling it on the row below light in the
+                same colour so the three form a triangle
   numpad 1-9,0  5-hour rate limit used %  cyan  / amber / red
   Ins..PgDn     7-day rate limit used %   violet/ amber / red
   Logo          model (Fable violet, Opus amber, Sonnet teal, Haiku green)
   Escape        red when any limit >= 90 %
-  Q..P/L/M..Z/A orange comet circling the letter block while the focused
-                session is mid-turn; whole ring breathes blue while it is
-                blocked on you
   everything else: dim base, pulsing red while an alarm is active
 
 The pure part (Session, Stats, SlotMap, render, snapshot) is unit tested and
@@ -74,11 +73,10 @@ SLOT_KEYS = [f"Key: {k}" for k in SLOT_LABELS]
 NUMPAD = [f"Key: Number Pad {k}" for k in "1234567890"]
 NAV = [f"Key: {k}" for k in ("Insert", "Home", "Page Up", "Delete", "End", "Page Down")]
 ALARM_AT = 90
-
-# Perimeter of the letter block, clockwise from Q. The comet runs along it.
-RING = [f"Key: {c}" for c in "QWERTYUIOPLMNBVCXZA"]
-SPIN_HZ = 8          # keys per second
-TAIL = 4             # trailing keys behind the head, fading out
+# The row below the slot keys is offset by half a key, so each slot key sits
+# above two keys: lighting those with the slot forms a triangle.
+_BELOW = ["Key: Tab"] + [f"Key: {c}" for c in "QWERTYUIOP"] + ["Key: [", "Key: ]"]
+TRIANGLE = {key: (_BELOW[i], _BELOW[i + 1]) for i, key in enumerate(SLOT_KEYS)}
 BUSY_MAX_AGE = 15 * 60   # a transcript silent this long is not mid-turn
 SLOT_GRACE = 10 * 60     # a slot outlives its session's last statusline write by this
 UNFOCUSED_DIM = 0.65
@@ -131,8 +129,6 @@ class Stats:
     h5: Optional[float]
     d7: Optional[float]
     model: Optional[str]
-    busy: bool = False            # focused/active session mid-turn
-    waiting: bool = False         # ... and blocked on a dialog
     slots: tuple[Optional[SlotView], ...] = ()   # aligned with SLOT_KEYS
 
 
@@ -192,16 +188,7 @@ def scaled(colour: Colour, k: float) -> Colour:
     return tuple(int(c * k) for c in colour)
 
 
-def spinner(frame: list[Colour], names: list[str], t: float) -> None:
-    head = int(t * SPIN_HZ) % len(RING)
-    for back in range(TAIL + 1):
-        key = RING[(head - back) % len(RING)]
-        if key in names:
-            k = 1 - back / (TAIL + 1)           # 1.0 at head, fading behind
-            frame[names.index(key)] = scaled(ORANGE, k)
-
-
-def paint(frame: list[Colour], names: list[str], keys: list[str], colour: Colour) -> None:
+def paint(frame: list[Colour], names: list[str], keys: Collection[str], colour: Colour) -> None:
     for key in keys:
         if key in names:
             frame[names.index(key)] = colour
@@ -238,16 +225,14 @@ def render(names: list[str], s: Optional[Stats], t: float) -> list[Colour]:
     bar(frame, names, NUMPAD, s.h5, CYAN, 70, 90)
     bar(frame, names, NAV, s.d7, VIOLET, 50, 80)
     for key, view in zip(SLOT_KEYS, s.slots):
-        if key in names:
-            frame[names.index(key)] = slot_colour(view, t)
+        colour = slot_colour(view, t)
+        paint(frame, names, [key], colour)
+        if view is not None and view[1]:
+            paint(frame, names, TRIANGLE[key], colour)
     if "Logo" in names:
         frame[names.index("Logo")] = model_colour(s.model)
     if alarm and "Key: Escape" in names:
         frame[names.index("Key: Escape")] = RED
-    if s.waiting:
-        paint(frame, names, RING, scaled(BLUE, 0.25 + 0.75 * breathe(t, 1.5)))
-    elif s.busy:
-        spinner(frame, names, t)
     return frame
 
 
@@ -367,7 +352,7 @@ def stats_from(sessions: list[Session], focus: Optional[str],
         ctx=(active.payload.get("context_window") or {}).get("used_percentage"),
         h5=h5, d7=d7,
         model=(active.payload.get("model") or {}).get("display_name"),
-        busy=active.busy, waiting=active.blocked, slots=slots,
+        slots=slots,
     )
 
 
