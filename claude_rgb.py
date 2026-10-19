@@ -49,7 +49,7 @@ from typing import Callable, Collection, Mapping, Optional
 
 Colour = tuple[int, int, int]
 
-BASE: Colour = (6, 6, 10)
+BASE: Colour = (0, 0, 0)
 UNKNOWN: Colour = (18, 18, 18)
 WHITE: Colour = (90, 90, 90)
 IDLE_LOGO: Colour = (20, 20, 20)

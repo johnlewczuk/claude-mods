@@ -38,9 +38,9 @@ shortcuts (the lighting works without either).
 | Ins Home PgUp Del End PgDn | 7-day rate limit used % | violet, amber >=50, red >=80 |
 | Logo          | model                       | Fable violet, Opus amber, Sonnet teal, Haiku green |
 | Escape        | alarm (any stat >= 90 %)    | red; all other keys pulse red  |
-| rest          | idle base                   | near-off; faint grey = unknown |
+| rest          | idle base                   | off; faint grey = unknown      |
 
-No fresh session for 30 s -> everything near-off, dim logo.
+No fresh session for 30 s -> everything off, dim logo.
 
 "Mid-turn" is read from the session's transcript tail: the last turn-state
 entry is a user prompt / tool_result or an assistant message -> busy; a
