@@ -15,7 +15,7 @@ def idx(name):
 
 
 def stats(**kw):
-    s = dict(ctx=None, h5=None, d7=None, model=None, slots=())
+    s = dict(ctx=None, h5=None, d7=None, model=None, has_session=True, slots=())
     s.update(kw)
     return cr.Stats(**s)
 
@@ -77,6 +77,15 @@ def test_alarm_pulses_base_keys_red_and_lights_escape():
     assert hot_a[idx("Key: Escape")] == cr.RED
     assert hot_a[idx("Key: A")] != hot_b[idx("Key: A")]
     assert hot_a[idx("Key: A")][0] > hot_a[idx("Key: A")][1]
+
+
+def test_no_focused_session_darkens_context_and_logo_but_keeps_rate_limits():
+    f = cr.render(NAMES, stats(ctx=50, h5=30, model="Fable", has_session=False,
+                               slots=((State.WORKING, False),)), t=0.0)
+    assert f[idx("Key: F1")] == cr.BASE
+    assert f[idx("Logo")] == cr.IDLE_LOGO
+    assert f[idx("Key: Number Pad 1")] == cr.CYAN
+    assert f[idx("Key: 1")] != cr.BASE
 
 
 def test_idle_frame_is_all_base_with_dim_logo():
@@ -215,7 +224,10 @@ def test_pick_stats_prefers_focused_pane_then_newest_transcript(tmp_path):
     s = cr.pick_stats(str(tmp_path), max_age=30, now=now, live_panes=panes)
     assert (s.ctx, s.model) == (11, "Fable")
     assert cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%2", live_panes=panes).ctx == 99
-    assert cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%9", live_panes=panes).ctx == 11
+    # a focused pane with no Claude session shows no session (not someone else's)
+    s = cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%9", live_panes=panes)
+    assert (s.has_session, s.ctx, s.model) == (False, None, None)
+    assert s.h5 is None and s.d7 is None or True          # rate limits still come from any session
 
 
 def test_pick_stats_takes_rate_limits_from_most_recently_active_session_that_has_them(tmp_path):

@@ -11,6 +11,8 @@ Data path:
 
 Layout (Razer Cynosa Chroma, but any keyboard with OpenRGB key names works):
   F1-F12        context window used %     green / amber / red
+                (of the session in the focused tmux pane; dark when that
+                pane holds no Claude session)
   1..0 - =      one key per Claude session (its "slot", stable for the
                 session's lifetime, Ctrl+Alt+<key> jumps to its tmux pane):
                   orange breathing  working (mid-turn)
@@ -130,6 +132,7 @@ class Stats:
     h5: Optional[float]
     d7: Optional[float]
     model: Optional[str]
+    has_session: bool = True      # False: focused pane holds no Claude session
     slots: tuple[Optional[SlotView], ...] = ()   # aligned with SLOT_KEYS
 
 
@@ -222,7 +225,8 @@ def render(names: list[str], s: Optional[Stats], t: float) -> list[Colour]:
     base = pulse(t) if alarm else BASE
     frame = [base] * len(names)
 
-    bar(frame, names, F_ROW, s.ctx, GREEN, 60, 80)
+    if s.has_session:
+        bar(frame, names, F_ROW, s.ctx, GREEN, 60, 80)
     bar(frame, names, NUMPAD, s.h5, CYAN, 70, 90)
     bar(frame, names, NAV, s.d7, VIOLET, 50, 80)
     for key, view in zip(SLOT_KEYS, s.slots):
@@ -231,7 +235,7 @@ def render(names: list[str], s: Optional[Stats], t: float) -> list[Colour]:
         if view is not None and view[1]:
             paint(frame, names, TRIANGLE[key], colour)
     if "Logo" in names:
-        frame[names.index("Logo")] = model_colour(s.model)
+        frame[names.index("Logo")] = model_colour(s.model) if s.has_session else IDLE_LOGO
     if alarm and "Key: Escape" in names:
         frame[names.index("Key: Escape")] = RED
     return frame
@@ -338,16 +342,19 @@ def rank(sessions: list[Session], focus: Optional[str]) -> list[Session]:
 
 def stats_from(sessions: list[Session], focus: Optional[str],
                slots: tuple[Optional[SlotView], ...] = ()) -> Optional[Stats]:
-    """Context % and model come from the focused session if there is one,
-    else from the most recently active. Rate limits are account-wide, but a
-    session only learns them from its own API responses, so an idle session
-    carries stale numbers and some carry none: take them from the first
-    session in that same order that has any."""
+    """Context % and model describe the session in the focused tmux pane.
+    A focused pane with no Claude session shows none (has_session=False)
+    rather than someone else's; outside tmux (focus None) the most recently
+    active session stands in. Rate limits are account-wide, but a session
+    only learns them from its own API responses, so an idle session carries
+    stale numbers and some carry none: take them from the focused session
+    if it has any, else the most recently active one that does."""
     live = [s for s in sessions if s.live]
     if not live:
         return None
     ranked = rank(live, focus)
     active = ranked[0]
+    has_session = focus is None or active.pane == focus
     h5 = d7 = None
     for s in ranked:
         rl = s.payload.get("rate_limits") or {}
@@ -355,6 +362,8 @@ def stats_from(sessions: list[Session], focus: Optional[str],
             h5 = (rl.get("five_hour") or {}).get("used_percentage")
             d7 = (rl.get("seven_day") or {}).get("used_percentage")
             break
+    if not has_session:
+        return Stats(ctx=None, h5=h5, d7=d7, model=None, has_session=False, slots=slots)
     return Stats(
         ctx=(active.payload.get("context_window") or {}).get("used_percentage"),
         h5=h5, d7=d7,
