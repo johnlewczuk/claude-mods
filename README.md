@@ -32,8 +32,7 @@ shortcuts (the lighting works without either).
 | Keys          | Stat                        | Colour                         |
 |---------------|-----------------------------|--------------------------------|
 | F1..F12       | context window used % of the session in the focused pane (dark if that pane has no Claude session) | green, amber >=60, red >=80 |
-| 1..0 - =      | one Claude session per key ("slot"); Ctrl+Alt+<key> jumps to it | orange breathing = working, blue breathing = blocked on you, ice blue (steady) = finished since you last looked, grey = idle/seen, off = empty. Focused session full brightness, others dim |
-| Tab,Q..P,[,]  | the two keys under the focused session's slot key light in its colour, forming a triangle; a focused idle session is white | |
+| 1..0 - =      | one Claude session per key ("slot"); Ctrl+Alt+<key> jumps to it | orange breathing = working, blue breathing = blocked on you, ice blue (steady) = finished since you last looked, grey = idle/seen, off = empty. Focused session full brightness (white when idle), others dim |
 | numpad 1..9,0 | 5-hour rate limit used %    | cyan, amber >=70, red >=90     |
 | Ins Home PgUp Del End PgDn | 7-day rate limit used % | violet, amber >=50, red >=80 |
 | Logo          | model                       | Fable violet, Opus amber, Sonnet teal, Haiku green |

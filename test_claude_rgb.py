@@ -112,20 +112,12 @@ def test_slot_keys_show_state_colours_and_focus_brightness():
     assert focused_unread[k1] == cr.SLOT_UNREAD
 
 
-def test_focused_slot_lights_the_two_keys_below_it_as_a_triangle():
-    views = ((State.IDLE, False), (State.UNREAD, True), (State.IDLE, False))
+def test_focused_idle_slot_is_white_and_nothing_below_it_lights():
+    views = ((State.IDLE, False), (State.IDLE, True))
     f = cr.render(NAMES, stats(slots=views), t=0.0)
-    assert f[idx("Key: 2")] == cr.SLOT_UNREAD
-    assert f[idx("Key: Q")] == cr.SLOT_UNREAD and f[idx("Key: W")] == cr.SLOT_UNREAD   # under "2", same colour
-    assert f[idx("Key: Tab")] == cr.BASE and f[idx("Key: E")] == cr.BASE            # not under "2"
+    assert f[idx("Key: 2")] == cr.FOCUS_IDLE
     assert f[idx("Key: 1")] == cr.scaled(cr.SLOT_GREY, cr.UNFOCUSED_DIM)
-    # a focused *idle* session is pale yellow on all three keys
-    first = cr.render(NAMES, stats(slots=((State.IDLE, True),)), t=0.0)
-    assert first[idx("Key: 1")] == first[idx("Key: Tab")] == first[idx("Key: Q")] == cr.FOCUS_IDLE
-    last = cr.render(NAMES, stats(slots=(None,) * 11 + ((State.IDLE, True),)), t=0.0)
-    assert last[idx("Key: [")] == cr.FOCUS_IDLE and last[idx("Key: ]")] == cr.FOCUS_IDLE
-    nothing = cr.render(NAMES, stats(slots=((State.IDLE, False),)), t=0.0)
-    assert nothing[idx("Key: Q")] == cr.BASE
+    assert f[idx("Key: Q")] == cr.BASE and f[idx("Key: W")] == cr.BASE
 
 
 def test_pick_stats_busy_and_waiting(tmp_path):

@@ -20,10 +20,8 @@ Layout (Razer Cynosa Chroma, but any keyboard with OpenRGB key names works):
                   ice blue          finished since you last looked at it
                   grey              idle, seen
                   off               no session in this slot
-                the focused session's key is at full brightness, others dim,
-                and the two keys straddling it on the row below light in the
-                same colour so the three form a triangle; a focused idle
-                session is white instead of grey
+                the focused session's key is at full brightness, others dim;
+                a focused idle session is white instead of grey
   numpad 1-9,0  5-hour rate limit used %  cyan  / amber / red
   Ins..PgDn     7-day rate limit used %   violet/ amber / red
   Logo          model (Fable violet, Opus amber, Sonnet teal, Haiku green)
@@ -77,10 +75,6 @@ SLOT_KEYS = [f"Key: {k}" for k in SLOT_LABELS]
 NUMPAD = [f"Key: Number Pad {k}" for k in "1234567890"]
 NAV = [f"Key: {k}" for k in ("Insert", "Home", "Page Up", "Delete", "End", "Page Down")]
 ALARM_AT = 90
-# The row below the slot keys is offset by half a key, so each slot key sits
-# above two keys: lighting those with the slot forms a triangle.
-_BELOW = ["Key: Tab"] + [f"Key: {c}" for c in "QWERTYUIOP"] + ["Key: [", "Key: ]"]
-TRIANGLE = {key: (_BELOW[i], _BELOW[i + 1]) for i, key in enumerate(SLOT_KEYS)}
 BUSY_MAX_AGE = 15 * 60   # a transcript silent this long is not mid-turn
 SLOT_GRACE = 60          # a slot outlives its session's last statusline write by this
 # tmux's #{pane_current_command} while Claude Code runs in the pane. Tool
@@ -234,10 +228,7 @@ def render(names: list[str], s: Optional[Stats], t: float) -> list[Colour]:
     bar(frame, names, NUMPAD, s.h5, CYAN, 70, 90)
     bar(frame, names, NAV, s.d7, VIOLET, 50, 80)
     for key, view in zip(SLOT_KEYS, s.slots):
-        colour = slot_colour(view, t)
-        paint(frame, names, [key], colour)
-        if view is not None and view[1]:
-            paint(frame, names, TRIANGLE[key], colour)
+        paint(frame, names, [key], slot_colour(view, t))
     if "Logo" in names:
         frame[names.index("Logo")] = model_colour(s.model) if s.has_session else IDLE_LOGO
     if alarm and "Key: Escape" in names:
