@@ -63,9 +63,13 @@ Everything counts as seen at daemon start, so a restart is not a wall of blue.
 ## Slots and Ctrl+Alt+<key>
 Slots are keyed by session_id, first free wins, and persisted in
 `~/.local/state/claude-rgb/slots.json` so a daemon restart does not reshuffle
-them. A slot is held while the session is live (fresh statusline or blocked
-on a dialog) and for 60 s after; a session whose tmux pane is gone is
-released at once. A 13th session gets no slot
+them. A session counts only while its tmux pane still runs `claude` (tmux's
+`pane_current_command`; tool subprocesses never take the tty foreground, so
+it holds mid-turn). After /exit the pane lives on as a shell and the last
+mirror file stays fresh for 30 s, which is why freshness alone is not
+enough. A slot is held while the session is live (fresh or blocked on a
+dialog) and for 60 s after it goes quiet; a session whose pane is gone or
+no longer runs claude is released at once. A 13th session gets no slot
 until one frees. Each session's statusline shows its key as `⌨3`; the daemon
 writes `$XDG_RUNTIME_DIR/claude-rgb/slots/<session_id>` for that.
 

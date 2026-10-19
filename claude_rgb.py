@@ -42,7 +42,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Collection, Optional
+from typing import Callable, Collection, Mapping, Optional
 
 Colour = tuple[int, int, int]
 
@@ -79,6 +79,9 @@ _BELOW = ["Key: Tab"] + [f"Key: {c}" for c in "QWERTYUIOP"] + ["Key: [", "Key: ]
 TRIANGLE = {key: (_BELOW[i], _BELOW[i + 1]) for i, key in enumerate(SLOT_KEYS)}
 BUSY_MAX_AGE = 15 * 60   # a transcript silent this long is not mid-turn
 SLOT_GRACE = 60          # a slot outlives its session's last statusline write by this
+# tmux's #{pane_current_command} while Claude Code runs in the pane. Tool
+# subprocesses never take the tty foreground, so this holds mid-turn too.
+CLAUDE_COMMANDS = {"claude", "node"}
 UNFOCUSED_DIM = 0.65
 
 # A Claude Code dialog (permission, AskUserQuestion, plan approval, folder
@@ -102,13 +105,11 @@ class Session:
     file_mtime: float
     activity: float          # transcript mtime: when it last did something
     fresh: bool              # statusline wrote recently
+    running: bool            # its pane exists and runs claude (True if no pane info)
     busy: bool
     blocked: bool
+    live: bool               # (fresh or blocked) and running
     payload: dict = field(compare=False, repr=False)
-
-    @property
-    def live(self) -> bool:
-        return self.fresh or self.blocked
 
     def state(self, viewed_at: float) -> State:
         if self.blocked:
@@ -283,15 +284,19 @@ def has_dialog(screen: str) -> bool:
 # --- sessions -------------------------------------------------------------------
 
 def load_sessions(state_dir: str, max_age: float, now: float,
-                  dialog_open: Callable[[str], bool], live_panes: Collection[str]) -> list[Session]:
+                  dialog_open: Callable[[str], bool], panes: Mapping[str, str]) -> list[Session]:
     """One Session per mirror file. A half-written file (statusline
-    mid-write) is skipped for this tick.
+    mid-write) is skipped for this tick. `panes` maps every existing tmux
+    pane id to its foreground command.
 
-    A session is `fresh` when the statusline wrote recently. It is `blocked`
-    when its pane still exists, its transcript ends mid-turn and a dialog is
-    on screen; Claude Code freezes the statusline while a dialog is up, so a
-    blocked session is usually NOT fresh and must be recognised this way.
-    Only mid-turn sessions with a live pane are screen-scraped."""
+    A session is `fresh` when the statusline wrote recently, and `running`
+    when its pane still runs claude: after /exit the pane lives on as a
+    shell and the last mirror file stays fresh for a while, so freshness
+    alone would keep a dead session lit. It is `blocked` when running, its
+    transcript ends mid-turn and a dialog is on screen; Claude Code freezes
+    the statusline while a dialog is up, so a blocked session is usually NOT
+    fresh and must be recognised this way. Only mid-turn running sessions
+    are screen-scraped."""
     try:
         files = [f for f in os.listdir(state_dir) if f.endswith(".json")]
     except FileNotFoundError:
@@ -311,12 +316,14 @@ def load_sessions(state_dir: str, max_age: float, now: float,
         except (TypeError, OSError):
             activity = mtime
         mid_turn = busy_from_transcript(transcript, now, max_age=None)
-        blocked = bool(pane) and pane in live_panes and mid_turn and dialog_open(pane)
+        running = pane is None or panes.get(pane) in CLAUDE_COMMANDS
+        blocked = bool(pane) and running and mid_turn and dialog_open(pane)
+        fresh = now - mtime <= max_age
         out.append(Session(
             id=p.get("session_id") or f[:-5], pane=pane, transcript=transcript,
-            file_mtime=mtime, activity=activity, fresh=now - mtime <= max_age,
+            file_mtime=mtime, activity=activity, fresh=fresh, running=running,
             busy=mid_turn and (blocked or now - activity <= BUSY_MAX_AGE),
-            blocked=blocked, payload=p))
+            blocked=blocked, live=(fresh or blocked) and running, payload=p))
     return out
 
 
@@ -359,7 +366,7 @@ def stats_from(sessions: list[Session], focus: Optional[str],
 def pick_stats(state_dir: str, max_age: float, now: Optional[float] = None,
                focus: Optional[str] = None,
                dialog_open: Callable[[str], bool] = lambda pane: False,
-               live_panes: Collection[str] = ()) -> Optional[Stats]:
+               live_panes: Mapping[str, str] = {}) -> Optional[Stats]:
     """Convenience: load + stats_from, without slots."""
     now = time.time() if now is None else now
     return stats_from(load_sessions(state_dir, max_age, now, dialog_open, live_panes), focus)
@@ -417,14 +424,12 @@ class SlotMap:
         os.replace(tmp, self.path)
 
 
-def held_ids(sessions: list[Session], now: float, live_panes: Collection[str]) -> list[str]:
-    """Sessions that keep (or get) a slot: live ones, plus ones that went
-    quiet within the grace period so a statusline hiccup does not reshuffle
-    keys. A session whose tmux pane no longer exists is gone for certain and
-    is released at once. Ordered oldest first so allocation is deterministic."""
-    def present(s: Session) -> bool:
-        return s.pane is None or s.pane in live_panes
-    keep = [s for s in sessions if s.live or (present(s) and now - s.file_mtime <= SLOT_GRACE)]
+def held_ids(sessions: list[Session], now: float, panes: Mapping[str, str]) -> list[str]:
+    """Sessions that keep (or get) a slot: live ones, plus running ones that
+    went quiet within the grace period so a statusline hiccup does not
+    reshuffle keys. A session whose pane is gone or no longer runs claude is
+    released at once. Ordered oldest first so allocation is deterministic."""
+    keep = [s for s in sessions if s.live or (s.running and now - s.file_mtime <= SLOT_GRACE)]
     return [s.id for s in sorted(keep, key=lambda s: s.file_mtime)]
 
 
@@ -487,14 +492,16 @@ def focused_pane() -> Optional[str]:
     return pane if r.returncode == 0 and pane.startswith("%") else None
 
 
-def live_panes() -> set[str]:
-    """Every pane id tmux currently has, across all sessions."""
+def live_panes() -> dict[str, str]:
+    """Every pane id tmux currently has -> its foreground command."""
     try:
-        r = subprocess.run(["tmux", "list-panes", "-a", "-F", "#{pane_id}"],
+        r = subprocess.run(["tmux", "list-panes", "-a", "-F", "#{pane_id} #{pane_current_command}"],
                            capture_output=True, text=True, timeout=1)
     except (OSError, subprocess.SubprocessError):
-        return set()
-    return set(r.stdout.split()) if r.returncode == 0 else set()
+        return {}
+    if r.returncode != 0:
+        return {}
+    return dict(line.split(" ", 1) for line in r.stdout.splitlines() if " " in line)
 
 
 def pane_has_dialog(pane: str) -> bool:

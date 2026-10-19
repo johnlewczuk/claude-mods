@@ -128,7 +128,7 @@ def test_pick_stats_busy_and_waiting(tmp_path):
     def dialog_open(pane):
         asked.append(pane)
         return pane == "%1"
-    sessions = cr.load_sessions(str(tmp_path), 30, now, dialog_open, {"%1", "%3"})
+    sessions = cr.load_sessions(str(tmp_path), 30, now, dialog_open, {"%1": "claude", "%3": "claude"})
     by = {x.id: x for x in sessions}
     assert (by["f"].busy, by["f"].blocked, by["i"].busy, by["i"].blocked) == (True, True, False, False)
     assert "%3" not in asked                       # idle sessions are never screen-scraped
@@ -211,10 +211,11 @@ def test_pick_stats_prefers_focused_pane_then_newest_transcript(tmp_path):
     write(tmp_path / "a.json", ta, tmux_pane="%1", context_window={"used_percentage": 11}, model={"display_name": "Fable"})
     write(tmp_path / "b.json", tb, tmux_pane="%2", context_window={"used_percentage": 99}, model={"display_name": "Opus"})
     os.utime(tmp_path / "b.json", (now, now))   # b's statusline wrote most recently -- irrelevant
-    s = cr.pick_stats(str(tmp_path), max_age=30, now=now)
+    panes = {"%1": "claude", "%2": "claude"}
+    s = cr.pick_stats(str(tmp_path), max_age=30, now=now, live_panes=panes)
     assert (s.ctx, s.model) == (11, "Fable")
-    assert cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%2").ctx == 99
-    assert cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%9").ctx == 11
+    assert cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%2", live_panes=panes).ctx == 99
+    assert cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%9", live_panes=panes).ctx == 11
 
 
 def test_pick_stats_takes_rate_limits_from_most_recently_active_session_that_has_them(tmp_path):
@@ -247,11 +248,11 @@ def test_blocked_session_with_frozen_statusline_still_counts(tmp_path):
     write(tmp_path / "b.json", tb, tmux_pane="%2", context_window={"used_percentage": 77})
     os.utime(tmp_path / "b.json", (now - 600, now - 600))
     dialog_open = lambda pane: pane == "%2"
-    s = cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%2", dialog_open=dialog_open, live_panes={"%1", "%2"})
+    s = cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%2", dialog_open=dialog_open, live_panes={"%1": "claude", "%2": "claude"})
     assert s.ctx == 77
-    s = cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%1", dialog_open=dialog_open, live_panes={"%1"})
+    s = cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%1", dialog_open=dialog_open, live_panes={"%1": "claude"})
     assert s.ctx == 5
-    sessions = cr.load_sessions(str(tmp_path), 30, now, dialog_open, {"%1"})
+    sessions = cr.load_sessions(str(tmp_path), 30, now, dialog_open, {"%1": "claude"})
     assert {x.id: x.live for x in sessions} == {"f": True, "b": False}
 
 
@@ -259,8 +260,9 @@ def test_blocked_session_with_frozen_statusline_still_counts(tmp_path):
 
 def sess(**kw):
     d = dict(id="s", pane="%1", transcript=None, file_mtime=0.0, activity=100.0,
-             fresh=True, busy=False, blocked=False, payload={})
+             fresh=True, running=True, busy=False, blocked=False, payload={})
     d.update(kw)
+    d.setdefault("live", (d["fresh"] or d["blocked"]) and d["running"])
     return cr.Session(**d)
 
 
@@ -311,9 +313,10 @@ def test_held_ids_keeps_live_and_grace_sessions_in_arrival_order():
     grace = sess(id="grace", pane="%3", file_mtime=now - 40, fresh=False)
     nopane = sess(id="nopane", pane=None, file_mtime=now - 40, fresh=False)
     dead = sess(id="dead", pane="%4", file_mtime=now - 3600, fresh=False)
-    closed = sess(id="closed", pane="%9", file_mtime=now - 5, fresh=False)   # pane vanished
-    panes = {"%1", "%2", "%3", "%4"}
-    assert cr.held_ids([live_new, dead, grace, nopane, live_old, closed], now, panes) == ["old", "grace", "nopane", "new"]
+    closed = sess(id="closed", pane="%9", file_mtime=now - 5, fresh=False, running=False)   # pane vanished
+    exited = sess(id="exited", pane="%5", file_mtime=now - 5, fresh=True, running=False)   # pane is a shell now
+    panes = {"%1": "claude", "%2": "claude", "%3": "claude", "%4": "claude", "%5": "bash"}
+    assert cr.held_ids([live_new, dead, grace, nopane, live_old, closed, exited], now, panes) == ["old", "grace", "nopane", "new"]
 
 
 def test_slot_views_follow_state_focus_and_grace(tmp_path):
@@ -340,3 +343,30 @@ def test_write_slot_labels_creates_and_removes_files(tmp_path):
     cr.write_slot_labels(str(tmp_path), m)
     assert not (tmp_path / "slots" / "a").exists()
     assert (tmp_path / "slots" / "b").read_text() == "2\n"
+
+
+# --- exited sessions ------------------------------------------------------------
+
+def test_session_whose_pane_no_longer_runs_claude_is_dead(tmp_path):
+    """After /exit the pane survives as a shell and the statusline's last
+    file stays fresh for a while; the pane's foreground command is the
+    truth. Claude's tool subprocesses never take the tty foreground, so
+    `claude` stays the pane command throughout a turn."""
+    now = time.time()
+    t = tmp_path / "t.jsonl"; t.write_text(jl(USER_PROMPT))
+    write(tmp_path / "a.json", t, tmux_pane="%1", context_window={"used_percentage": 11})
+    panes = {"%1": "bash"}
+    ss = cr.load_sessions(str(tmp_path), 30, now, lambda p: True, panes)
+    assert ss[0].live is False and ss[0].blocked is False
+    assert cr.held_ids(ss, now, panes) == []
+    assert cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%1", live_panes=panes) is None
+    panes = {"%1": "claude"}
+    ss = cr.load_sessions(str(tmp_path), 30, now, lambda p: True, panes)
+    assert ss[0].live is True and ss[0].blocked is True
+    assert cr.held_ids(ss, now, panes) == ["a"]
+
+
+def test_session_without_pane_info_is_judged_by_freshness_only(tmp_path):
+    now = time.time()
+    write(tmp_path / "a.json", None, context_window={"used_percentage": 11})
+    assert cr.load_sessions(str(tmp_path), 30, now, lambda p: False, {})[0].live is True
