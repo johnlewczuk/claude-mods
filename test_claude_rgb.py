@@ -322,7 +322,7 @@ def test_held_ids_keeps_live_and_grace_sessions_in_arrival_order():
     closed = sess(id="closed", pane="%9", file_mtime=now - 5, fresh=False, running=False)   # pane vanished
     exited = sess(id="exited", pane="%5", file_mtime=now - 5, fresh=True, running=False)   # pane is a shell now
     panes = {"%1": "claude", "%2": "claude", "%3": "claude", "%4": "claude", "%5": "bash"}
-    assert cr.held_ids([live_new, dead, grace, nopane, live_old, closed, exited], now, panes) == ["old", "grace", "nopane", "new"]
+    assert cr.held_ids([live_new, dead, grace, nopane, live_old, closed, exited], now, panes) == ["old", "grace", "new"]   # nopane: no slot
 
 
 def test_slot_views_follow_state_focus_and_grace(tmp_path):
