@@ -62,7 +62,7 @@ ORANGE: Colour = (255, 70, 0)
 BLUE: Colour = (0, 90, 255)
 SLOT_UNREAD: Colour = (90, 190, 255)   # ice blue, steady (blocked is deep blue, breathing)
 SLOT_GREY: Colour = (130, 130, 150)
-FOCUS_IDLE: Colour = (255, 225, 110)  # pale yellow: the focused session when idle
+FOCUS_IDLE: Colour = (255, 215, 40)  # pale yellow: the focused session when idle
 
 MODEL_COLOURS: dict[str, Colour] = {
     "fable": (150, 0, 200),
