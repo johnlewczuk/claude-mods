@@ -311,27 +311,64 @@ def is_agent(payload: dict) -> bool:
     return bool(payload.get("agent_type") or payload.get("agent"))
 
 
+@dataclass(frozen=True)
+class Candidate:
+    """A session that might be the one a pane is displaying."""
+    id: str
+    name: Optional[str]
+    fresh: bool
+    tagged: bool        # the hook saw TMUX_PANE: the pane's own foreground claude
+    mid_turn: bool
+    mtime: float
+
+
+def pane_owner(cands: list[Candidate], screen: str) -> Candidate:
+    """Which of several sessions sharing a pane is the one on screen.
+    Claude Code can host extra sessions (forks, /resume targets) in
+    background ptys and attach the pane to one of them; all of them keep
+    writing their mirror file every second, so "newest file" would flap.
+      1. An attached session shows its name in the separator above the
+         prompt; a fork's name extends its parent's, so the longest name
+         found on screen wins.
+      2. A dialog on screen belongs to the displayed session, whose
+         statusline is frozen: the stale mid-turn one.
+      3. Otherwise the pane's own foreground claude (tagged), if fresh.
+      4. Otherwise the newest fresh one, else the newest."""
+    named = [c for c in cands if c.name and c.name[:40] in screen]
+    if named:
+        return max(named, key=lambda c: len(c.name))
+    if has_dialog(screen):
+        frozen = [c for c in cands if c.mid_turn and not c.fresh]
+        if frozen:
+            return max(frozen, key=lambda c: c.mtime)
+    fresh = [c for c in cands if c.fresh]
+    tagged = [c for c in fresh if c.tagged]
+    if tagged:
+        return max(tagged, key=lambda c: c.mtime)
+    return max(fresh or cands, key=lambda c: c.mtime)
+
+
 def load_sessions(state_dir: str, max_age: float, now: float,
-                  dialog_open: Callable[[str], bool], panes: Mapping[str, str],
+                  screen_of: Callable[[str], str], panes: Mapping[str, str],
                   pane_pids: Mapping[int, str] = {},
                   parent_of: Callable[[int], Optional[int]] = parent_pid) -> list[Session]:
     """One Session per mirror file. A half-written file (statusline
     mid-write) is skipped for this tick. `panes` maps every existing tmux
     pane id to its foreground command, `pane_pids` each pane's shell pid to
-    the pane id. A session's pane is its tmux_pane tag if the hook had one,
-    else the pane found by walking up from claude_pid; background agents get
-    none.
+    the pane id, and screen_of(pane) returns the pane's visible text (it is
+    only called for panes that need it). A session's pane is its tmux_pane
+    tag if the hook had one, else the pane found by walking up from
+    claude_pid; background agents get none.
 
     A session is `fresh` when the statusline wrote recently, and `running`
-    when its pane still runs claude AND it is the newest session in that
-    pane: after /exit the pane lives on as a shell and the last mirror file
-    stays fresh for a while, and /clear, /resume or a restart in the same
-    pane leaves the previous session's file behind, so freshness alone
-    would keep a dead session lit. It is `blocked` when running, its
-    transcript ends mid-turn and a dialog is on screen; Claude Code freezes
-    the statusline while a dialog is up, so a blocked session is usually NOT
-    fresh and must be recognised this way. Only mid-turn running sessions
-    are screen-scraped."""
+    when its pane still runs claude AND it is the session that pane displays
+    (pane_owner): after /exit the pane lives on as a shell and the last
+    mirror file stays fresh for a while; /clear, /resume or a restart in the
+    same pane leaves the previous session's file behind; and background-
+    hosted sessions share the pane with the foreground one. It is `blocked`
+    when running, its transcript ends mid-turn and a dialog is on screen;
+    Claude Code freezes the statusline while a dialog is up, so a blocked
+    session is usually NOT fresh and must be recognised this way."""
     try:
         files = [f for f in os.listdir(state_dir) if f.endswith(".json")]
     except FileNotFoundError:
@@ -349,27 +386,46 @@ def load_sessions(state_dir: str, max_age: float, now: float,
             return None
         return p.get("tmux_pane") or resolve_pane(p.get("claude_pid"), pane_pids, parent_of)
 
-    located = [(f, mtime, p, pane_of(p)) for f, mtime, p in loaded]
-    newest_in_pane: dict[str, float] = {}
-    for _, mtime, _, pane in located:
-        if pane:
-            newest_in_pane[pane] = max(newest_in_pane.get(pane, 0.0), mtime)
-    out = []
-    for f, mtime, p, pane in located:
+    rows = []
+    for f, mtime, p in loaded:
         transcript = p.get("transcript_path")
         try:
             activity = os.stat(transcript).st_mtime
         except (TypeError, OSError):
             activity = mtime
-        mid_turn = busy_from_transcript(transcript, now, max_age=None)
-        running = pane is None or (panes.get(pane) in CLAUDE_COMMANDS and mtime >= newest_in_pane[pane])
-        blocked = bool(pane) and running and mid_turn and dialog_open(pane)
-        fresh = now - mtime <= max_age
+        rows.append(dict(
+            id=p.get("session_id") or f[:-5], pane=pane_of(p), transcript=transcript,
+            mtime=mtime, activity=activity, fresh=now - mtime <= max_age,
+            mid_turn=busy_from_transcript(transcript, now, max_age=None), payload=p))
+
+    # One screen capture per pane that needs one: several sessions to choose
+    # between, or a mid-turn session to check for a dialog.
+    screens: dict[str, str] = {}
+    by_pane: dict[str, list[dict]] = {}
+    for r in rows:
+        if r["pane"] and panes.get(r["pane"]) in CLAUDE_COMMANDS:
+            by_pane.setdefault(r["pane"], []).append(r)
+    owner: dict[str, str] = {}
+    for pane, rs in by_pane.items():
+        if len(rs) > 1 or any(r["mid_turn"] for r in rs):
+            screens[pane] = screen_of(pane)
+        if len(rs) == 1:
+            owner[pane] = rs[0]["id"]
+        else:
+            cands = [Candidate(r["id"], r["payload"].get("session_name"), r["fresh"],
+                               bool(r["payload"].get("tmux_pane")), r["mid_turn"], r["mtime"]) for r in rs]
+            owner[pane] = pane_owner(cands, screens[pane]).id
+
+    out = []
+    for r in rows:
+        pane = r["pane"]
+        running = pane is None or owner.get(pane) == r["id"]
+        blocked = bool(pane) and running and r["mid_turn"] and has_dialog(screens.get(pane, ""))
         out.append(Session(
-            id=p.get("session_id") or f[:-5], pane=pane, transcript=transcript,
-            file_mtime=mtime, activity=activity, fresh=fresh, running=running,
-            busy=mid_turn and (blocked or now - activity <= BUSY_MAX_AGE),
-            blocked=blocked, live=(fresh or blocked) and running, payload=p))
+            id=r["id"], pane=pane, transcript=r["transcript"],
+            file_mtime=r["mtime"], activity=r["activity"], fresh=r["fresh"], running=running,
+            busy=r["mid_turn"] and (blocked or now - r["activity"] <= BUSY_MAX_AGE),
+            blocked=blocked, live=(r["fresh"] or blocked) and running, payload=r["payload"]))
     return out
 
 
@@ -416,11 +472,11 @@ def stats_from(sessions: list[Session], focus: Optional[str],
 
 def pick_stats(state_dir: str, max_age: float, now: Optional[float] = None,
                focus: Optional[str] = None,
-               dialog_open: Callable[[str], bool] = lambda pane: False,
+               screen_of: Callable[[str], str] = lambda pane: "",
                live_panes: Mapping[str, str] = {}) -> Optional[Stats]:
     """Convenience: load + stats_from, without slots."""
     now = time.time() if now is None else now
-    return stats_from(load_sessions(state_dir, max_age, now, dialog_open, live_panes), focus)
+    return stats_from(load_sessions(state_dir, max_age, now, screen_of, live_panes), focus)
 
 
 # --- slots ------------------------------------------------------------------------
@@ -565,17 +621,18 @@ def live_panes() -> tuple[dict[str, str], dict[int, str]]:
     return cmds, pids
 
 
-def pane_has_dialog(pane: str) -> bool:
-    """Is a Claude Code dialog on screen in this tmux pane right now? The
-    transcript cannot tell a pending permission prompt from a slow tool, and
-    no hook fires when a dialog is answered, so the screen is the one source
-    that is right the instant you answer."""
+def pane_screen(pane: str) -> str:
+    """The visible text of a tmux pane. It tells us two things the files
+    cannot: whether a Claude Code dialog is up (the transcript cannot tell a
+    pending permission prompt from a slow tool, and no hook fires when a
+    dialog is answered), and which of several hosted sessions the pane is
+    showing (its name in the separator)."""
     try:
         r = subprocess.run(["tmux", "capture-pane", "-p", "-t", pane],
                            capture_output=True, text=True, timeout=1)
     except (OSError, subprocess.SubprocessError):
-        return False
-    return r.returncode == 0 and has_dialog(r.stdout)
+        return ""
+    return r.stdout if r.returncode == 0 else ""
 
 
 # --- daemon ------------------------------------------------------------------------
@@ -627,7 +684,7 @@ def main() -> int:
                 if focus:
                     viewed[focus] = wall
                 panes, pane_pids = live_panes()
-                sessions = load_sessions(state_dir, max_age, wall, pane_has_dialog, panes, pane_pids)
+                sessions = load_sessions(state_dir, max_age, wall, pane_screen, panes, pane_pids)
                 if slots.update(held_ids(sessions, wall, panes)):
                     print(f"claude-rgb: slots {slots.slots}", flush=True)
                 write_slot_labels(state_dir, slots)

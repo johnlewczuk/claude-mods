@@ -128,10 +128,10 @@ def test_pick_stats_busy_and_waiting(tmp_path):
     write(tmp_path / "f.json", tf, tmux_pane="%1")
     write(tmp_path / "i.json", ti, tmux_pane="%3")
     asked = []
-    def dialog_open(pane):
+    def screen_of(pane):
         asked.append(pane)
-        return pane == "%1"
-    sessions = cr.load_sessions(str(tmp_path), 30, now, dialog_open, {"%1": "claude", "%3": "claude"})
+        return PERM_SCREEN if pane == "%1" else IDLE_SCREEN
+    sessions = cr.load_sessions(str(tmp_path), 30, now, screen_of, {"%1": "claude", "%3": "claude"})
     by = {x.id: x for x in sessions}
     assert (by["f"].busy, by["f"].blocked, by["i"].busy, by["i"].blocked) == (True, True, False, False)
     assert "%3" not in asked                       # idle sessions are never screen-scraped
@@ -253,12 +253,12 @@ def test_blocked_session_with_frozen_statusline_still_counts(tmp_path):
     write(tmp_path / "f.json", tf, tmux_pane="%1", context_window={"used_percentage": 5})
     write(tmp_path / "b.json", tb, tmux_pane="%2", context_window={"used_percentage": 77})
     os.utime(tmp_path / "b.json", (now - 600, now - 600))
-    dialog_open = lambda pane: pane == "%2"
-    s = cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%2", dialog_open=dialog_open, live_panes={"%1": "claude", "%2": "claude"})
+    screen_of = lambda pane: PERM_SCREEN if pane == "%2" else IDLE_SCREEN
+    s = cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%2", screen_of=screen_of, live_panes={"%1": "claude", "%2": "claude"})
     assert s.ctx == 77
-    s = cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%1", dialog_open=dialog_open, live_panes={"%1": "claude"})
+    s = cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%1", screen_of=screen_of, live_panes={"%1": "claude"})
     assert s.ctx == 5
-    sessions = cr.load_sessions(str(tmp_path), 30, now, dialog_open, {"%1": "claude"})
+    sessions = cr.load_sessions(str(tmp_path), 30, now, screen_of, {"%1": "claude"})
     assert {x.id: x.live for x in sessions} == {"f": True, "b": False}
 
 
@@ -362,12 +362,12 @@ def test_session_whose_pane_no_longer_runs_claude_is_dead(tmp_path):
     t = tmp_path / "t.jsonl"; t.write_text(jl(USER_PROMPT))
     write(tmp_path / "a.json", t, tmux_pane="%1", context_window={"used_percentage": 11})
     panes = {"%1": "bash"}
-    ss = cr.load_sessions(str(tmp_path), 30, now, lambda p: True, panes)
+    ss = cr.load_sessions(str(tmp_path), 30, now, lambda p: PERM_SCREEN, panes)
     assert ss[0].live is False and ss[0].blocked is False
     assert cr.held_ids(ss, now, panes) == []
     assert cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%1", live_panes=panes) is None
     panes = {"%1": "claude"}
-    ss = cr.load_sessions(str(tmp_path), 30, now, lambda p: True, panes)
+    ss = cr.load_sessions(str(tmp_path), 30, now, lambda p: PERM_SCREEN, panes)
     assert ss[0].live is True and ss[0].blocked is True
     assert cr.held_ids(ss, now, panes) == ["a"]
 
@@ -375,7 +375,7 @@ def test_session_whose_pane_no_longer_runs_claude_is_dead(tmp_path):
 def test_session_without_pane_info_is_judged_by_freshness_only(tmp_path):
     now = time.time()
     write(tmp_path / "a.json", None, context_window={"used_percentage": 11})
-    assert cr.load_sessions(str(tmp_path), 30, now, lambda p: False, {})[0].live is True
+    assert cr.load_sessions(str(tmp_path), 30, now, lambda p: "", {})[0].live is True
 
 
 # --- slots are for sessions you can jump to ------------------------------------
@@ -390,7 +390,7 @@ def test_sessions_without_a_pane_get_no_slot_but_still_feed_stats(tmp_path):
     t = tmp_path / "t.jsonl"; t.write_text(jl(ASSIST_END, TURN_DONE))
     write(tmp_path / "main.json", t, tmux_pane="%1")
     panes = {"%1": "claude"}
-    ss = cr.load_sessions(str(tmp_path), 30, now, lambda p: False, panes)
+    ss = cr.load_sessions(str(tmp_path), 30, now, lambda p: "", panes)
     assert cr.held_ids(ss, now, panes) == ["main"]
     assert cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%1", live_panes=panes).h5 == 42
 
@@ -404,7 +404,7 @@ def test_newest_session_in_a_pane_supersedes_older_ones(tmp_path):
     write(tmp_path / "new.json", t, tmux_pane="%1", context_window={"used_percentage": 3})
     os.utime(tmp_path / "old.json", (now - 5, now - 5))
     panes = {"%1": "claude"}
-    ss = {s.id: s for s in cr.load_sessions(str(tmp_path), 30, now, lambda p: True, panes)}
+    ss = {s.id: s for s in cr.load_sessions(str(tmp_path), 30, now, lambda p: PERM_SCREEN, panes)}
     assert ss["new"].running and ss["new"].live
     assert not ss["old"].running and not ss["old"].live and not ss["old"].blocked
     assert cr.held_ids(list(ss.values()), now, panes) == ["new"]
@@ -436,11 +436,62 @@ def test_forks_and_subagents_are_placed_by_pid_not_env(tmp_path):
     write(tmp_path / "parent.json", t, tmux_pane="%7", claude_pid=400, context_window={"used_percentage": 50})
     write(tmp_path / "fork.json", t, claude_pid=500, context_window={"used_percentage": 5})
     write(tmp_path / "agent.json", t, claude_pid=400, agent_type="Explore", agent="x")
-    os.utime(tmp_path / "parent.json", (now - 10, now - 10))   # parent paused while the fork is shown
+    os.utime(tmp_path / "parent.json", (now - 60, now - 60))   # parent's statusline paused while the fork is shown
     panes = {"%7": "claude"}
-    ss = {s.id: s for s in cr.load_sessions(str(tmp_path), 30, now, lambda p: False, panes,
+    ss = {s.id: s for s in cr.load_sessions(str(tmp_path), 30, now, lambda p: "", panes,
                                             pane_pids=PANE_PIDS, parent_of=PARENTS.get)}
     assert ss["fork"].pane == "%7" and ss["fork"].running
     assert ss["parent"].pane == "%7" and not ss["parent"].running          # superseded by the fork
     assert ss["agent"].pane is None
     assert cr.held_ids(list(ss.values()), now, panes) == ["fork"]
+
+
+# --- which session a pane displays ------------------------------------------------
+
+def cand(id, name=None, fresh=True, tagged=False, mid_turn=False, mtime=100.0):
+    return cr.Candidate(id=id, name=name, fresh=fresh, tagged=tagged, mid_turn=mid_turn, mtime=mtime)
+
+
+def test_pane_owner_prefers_the_name_shown_on_screen_longest_match_wins():
+    """Claude Code shows an attached (forked/switched) session's name in the
+    separator above the prompt. A fork's name extends its parent's, so the
+    longest name on screen is the displayed one."""
+    screen = "─── Demo setup ⑂ Are you sure ───\n❯ \n"
+    parent = cand("parent", "Demo setup", tagged=True, mtime=50)
+    fork = cand("fork", "Demo setup ⑂ Are you sure", mtime=90)
+    other = cand("other", "Something else", mtime=99)
+    assert cr.pane_owner([parent, fork, other], screen).id == "fork"
+
+
+def test_pane_owner_with_a_dialog_picks_the_frozen_mid_turn_session():
+    """The statusline freezes while a dialog is up, so the displayed session
+    is the stale mid-turn one, even though a background session stays fresh."""
+    fg = cand("fg", None, fresh=False, tagged=True, mid_turn=True, mtime=10)
+    bg = cand("bg", "Background job", fresh=True, mtime=99)
+    assert cr.pane_owner([fg, bg], PERM_SCREEN).id == "fg"
+
+
+def test_pane_owner_falls_back_to_tagged_foreground_then_newest():
+    fg = cand("fg", None, tagged=True, mtime=10)
+    bg1 = cand("bg1", "Job one", mtime=99)
+    bg2 = cand("bg2", "Job two", mtime=98)
+    assert cr.pane_owner([fg, bg1, bg2], IDLE_SCREEN).id == "fg"        # no names on screen
+    assert cr.pane_owner([bg1, bg2], IDLE_SCREEN).id == "bg1"           # newest of the rest
+    stale = cand("stale", None, fresh=False, mtime=5)
+    assert cr.pane_owner([stale, bg2], IDLE_SCREEN).id == "bg2"         # fresh beats stale
+    assert cr.pane_owner([stale], IDLE_SCREEN).id == "stale"
+
+
+def test_two_refreshing_background_sessions_in_one_pane_do_not_flap(tmp_path):
+    now = time.time()
+    t = tmp_path / "t.jsonl"; t.write_text(jl(ASSIST_END, TURN_DONE))
+    write(tmp_path / "a.json", t, claude_pid=500, session_name="Demo setup")
+    write(tmp_path / "b.json", t, claude_pid=500, session_name="Demo setup ⑂ Are you sure")
+    screen = "─── Demo setup ⑂ Are you sure ───\n❯ \n"
+    panes = {"%7": "claude"}
+    for newer in ("a", "b"):                          # whichever wrote last, b is displayed
+        os.utime(tmp_path / f"{newer}.json", (now, now))
+        ss = {s.id: s for s in cr.load_sessions(str(tmp_path), 30, now, lambda p: screen, panes,
+                                                pane_pids=PANE_PIDS, parent_of=PARENTS.get)}
+        assert ss["b"].running and not ss["a"].running
+        assert cr.held_ids(list(ss.values()), now, panes) == ["b"]

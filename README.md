@@ -66,8 +66,15 @@ them. A session counts only while its tmux pane still runs `claude` (tmux's
 `pane_current_command`; tool subprocesses never take the tty foreground, so
 it holds mid-turn). After /exit the pane lives on as a shell and the last
 mirror file stays fresh for 30 s, which is why freshness alone is not
-enough. Only the newest session in a pane counts (/clear, /resume or a restart in
-the same pane leaves the old session's file behind). A slot is held while
+enough. One session per pane counts: Claude Code can host extra sessions (forks,
+/resume targets) in background ptys and attach the pane to one, and all of
+them write their mirror file every second, so the daemon decides which is
+on screen: the session whose name appears in the separator above the prompt
+(longest match, since a fork's name extends its parent's); else, if a dialog
+is up, the stale mid-turn session (the statusline freezes behind a dialog);
+else the pane's own foreground claude if fresh; else the newest fresh file.
+/clear, /resume or a restart in the same pane leaves the old session's file
+behind, and the same rule retires it. A slot is held while
 the session is live (fresh or blocked on a dialog) and for 60 s after it
 goes quiet; a session whose pane is gone or no longer runs claude is
 released at once. Subagents and forks run the statusline too, with their
