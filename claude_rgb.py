@@ -23,7 +23,7 @@ Layout (Razer Cynosa Chroma, but any keyboard with OpenRGB key names works):
                 the focused session's key is at full brightness, others dim,
                 and the two keys straddling it on the row below light in the
                 same colour so the three form a triangle; a focused idle
-                session is pale yellow instead of grey
+                session is white instead of grey
   numpad 1-9,0  5-hour rate limit used %  cyan  / amber / red
   Ins..PgDn     7-day rate limit used %   violet/ amber / red
   Logo          model (Fable violet, Opus amber, Sonnet teal, Haiku green)
@@ -62,7 +62,7 @@ ORANGE: Colour = (255, 70, 0)
 BLUE: Colour = (0, 90, 255)
 SLOT_UNREAD: Colour = (90, 190, 255)   # ice blue, steady (blocked is deep blue, breathing)
 SLOT_GREY: Colour = (130, 130, 150)
-FOCUS_IDLE: Colour = (255, 215, 40)  # pale yellow: the focused session when idle
+FOCUS_IDLE: Colour = (255, 255, 255)  # white: the focused session when idle
 
 MODEL_COLOURS: dict[str, Colour] = {
     "fable": (150, 0, 200),
