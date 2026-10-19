@@ -66,9 +66,13 @@ them. A session counts only while its tmux pane still runs `claude` (tmux's
 `pane_current_command`; tool subprocesses never take the tty foreground, so
 it holds mid-turn). After /exit the pane lives on as a shell and the last
 mirror file stays fresh for 30 s, which is why freshness alone is not
-enough. A slot is held while the session is live (fresh or blocked on a
-dialog) and for 60 s after it goes quiet; a session whose pane is gone or
-no longer runs claude is released at once. A 13th session gets no slot
+enough. Only the newest session in a pane counts (/clear, /resume or a restart in
+the same pane leaves the old session's file behind). A slot is held while
+the session is live (fresh or blocked on a dialog) and for 60 s after it
+goes quiet; a session whose pane is gone or no longer runs claude is
+released at once. Subagents and forks run the statusline too, with their
+own session id and no tmux pane: they feed the rate-limit bars but get no
+slot, since there is nothing to jump to. A 13th session gets no slot
 until one frees. Each session's statusline shows its key as `⌨3`; the daemon
 writes `$XDG_RUNTIME_DIR/claude-rgb/slots/<session_id>` for that.
 

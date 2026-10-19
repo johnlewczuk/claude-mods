@@ -103,7 +103,7 @@ class Session:
     file_mtime: float
     activity: float          # transcript mtime: when it last did something
     fresh: bool              # statusline wrote recently
-    running: bool            # its pane exists and runs claude (True if no pane info)
+    running: bool            # its pane runs claude and no newer session shares the pane (True if no pane)
     busy: bool
     blocked: bool
     live: bool               # (fresh or blocked) and running
@@ -289,9 +289,11 @@ def load_sessions(state_dir: str, max_age: float, now: float,
     pane id to its foreground command.
 
     A session is `fresh` when the statusline wrote recently, and `running`
-    when its pane still runs claude: after /exit the pane lives on as a
-    shell and the last mirror file stays fresh for a while, so freshness
-    alone would keep a dead session lit. It is `blocked` when running, its
+    when its pane still runs claude AND it is the newest session in that
+    pane: after /exit the pane lives on as a shell and the last mirror file
+    stays fresh for a while, and /clear, /resume or a restart in the same
+    pane leaves the previous session's file behind, so freshness alone
+    would keep a dead session lit. It is `blocked` when running, its
     transcript ends mid-turn and a dialog is on screen; Claude Code freezes
     the statusline while a dialog is up, so a blocked session is usually NOT
     fresh and must be recognised this way. Only mid-turn running sessions
@@ -300,22 +302,27 @@ def load_sessions(state_dir: str, max_age: float, now: float,
         files = [f for f in os.listdir(state_dir) if f.endswith(".json")]
     except FileNotFoundError:
         return []
-    out = []
+    loaded = []
     for f in files:
         path = os.path.join(state_dir, f)
         try:
             with open(path) as fh:
-                mtime = os.stat(path).st_mtime
-                p = json.load(fh)
+                loaded.append((f, os.stat(path).st_mtime, json.load(fh)))
         except (OSError, ValueError):
             continue
+    newest_in_pane: dict[str, float] = {}
+    for _, mtime, p in loaded:
+        if p.get("tmux_pane"):
+            newest_in_pane[p["tmux_pane"]] = max(newest_in_pane.get(p["tmux_pane"], 0.0), mtime)
+    out = []
+    for f, mtime, p in loaded:
         pane, transcript = p.get("tmux_pane"), p.get("transcript_path")
         try:
             activity = os.stat(transcript).st_mtime
         except (TypeError, OSError):
             activity = mtime
         mid_turn = busy_from_transcript(transcript, now, max_age=None)
-        running = pane is None or panes.get(pane) in CLAUDE_COMMANDS
+        running = pane is None or (panes.get(pane) in CLAUDE_COMMANDS and mtime >= newest_in_pane[pane])
         blocked = bool(pane) and running and mid_turn and dialog_open(pane)
         fresh = now - mtime <= max_age
         out.append(Session(
@@ -432,8 +439,11 @@ def held_ids(sessions: list[Session], now: float, panes: Mapping[str, str]) -> l
     """Sessions that keep (or get) a slot: live ones, plus running ones that
     went quiet within the grace period so a statusline hiccup does not
     reshuffle keys. A session whose pane is gone or no longer runs claude is
-    released at once. Ordered oldest first so allocation is deterministic."""
-    keep = [s for s in sessions if s.live or (s.running and now - s.file_mtime <= SLOT_GRACE)]
+    released at once. Sessions without a tmux pane (subagents, forks, claude
+    outside tmux) cannot be jumped to and get no slot. Ordered oldest first
+    so allocation is deterministic."""
+    keep = [s for s in sessions
+            if s.pane and (s.live or (s.running and now - s.file_mtime <= SLOT_GRACE))]
     return [s.id for s in sorted(keep, key=lambda s: s.file_mtime)]
 
 

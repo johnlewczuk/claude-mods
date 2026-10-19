@@ -376,3 +376,36 @@ def test_session_without_pane_info_is_judged_by_freshness_only(tmp_path):
     now = time.time()
     write(tmp_path / "a.json", None, context_window={"used_percentage": 11})
     assert cr.load_sessions(str(tmp_path), 30, now, lambda p: False, {})[0].live is True
+
+
+# --- slots are for sessions you can jump to ------------------------------------
+
+def test_sessions_without_a_pane_get_no_slot_but_still_feed_stats(tmp_path):
+    """Subagents and forks run the statusline too, with their own session id
+    and no tmux pane. They cannot be jumped to, so no slot; their rate
+    limits are as good as anyone's though."""
+    now = time.time()
+    write(tmp_path / "agent.json", None, agent_type="fork",
+          rate_limits={"five_hour": {"used_percentage": 42}})
+    t = tmp_path / "t.jsonl"; t.write_text(jl(ASSIST_END, TURN_DONE))
+    write(tmp_path / "main.json", t, tmux_pane="%1")
+    panes = {"%1": "claude"}
+    ss = cr.load_sessions(str(tmp_path), 30, now, lambda p: False, panes)
+    assert cr.held_ids(ss, now, panes) == ["main"]
+    assert cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%1", live_panes=panes).h5 == 42
+
+
+def test_newest_session_in_a_pane_supersedes_older_ones(tmp_path):
+    """/clear, /resume or restarting claude in the same pane gives a new
+    session id; the old one's file lingers. Only the newest per pane runs."""
+    now = time.time()
+    t = tmp_path / "t.jsonl"; t.write_text(jl(USER_PROMPT))
+    write(tmp_path / "old.json", t, tmux_pane="%1", context_window={"used_percentage": 90})
+    write(tmp_path / "new.json", t, tmux_pane="%1", context_window={"used_percentage": 3})
+    os.utime(tmp_path / "old.json", (now - 5, now - 5))
+    panes = {"%1": "claude"}
+    ss = {s.id: s for s in cr.load_sessions(str(tmp_path), 30, now, lambda p: True, panes)}
+    assert ss["new"].running and ss["new"].live
+    assert not ss["old"].running and not ss["old"].live and not ss["old"].blocked
+    assert cr.held_ids(list(ss.values()), now, panes) == ["new"]
+    assert cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%1", live_panes=panes).ctx == 3
