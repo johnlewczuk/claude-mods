@@ -285,10 +285,93 @@ def test_blocked_session_with_frozen_statusline_still_counts(tmp_path):
 
 def sess(**kw):
     d = dict(id="s", pane="%1", transcript=None, file_mtime=0.0, activity=100.0,
-             fresh=True, running=True, busy=False, blocked=False, payload={})
+             fresh=True, running=True, busy=False, blocked=False, agent=False, payload={})
     d.update(kw)
     d.setdefault("live", (d["fresh"] or d["blocked"]) and d["running"])
     return cr.Session(**d)
+
+
+def test_held_bg_ids_takes_paneless_non_agent_sessions_only():
+    now = 1000.0
+    ss = [sess(id="bg", pane=None, file_mtime=now),
+          sess(id="sub", pane=None, agent=True, file_mtime=now),
+          sess(id="shown", pane="%1", file_mtime=now),
+          sess(id="old", pane=None, fresh=False, file_mtime=now - cr.SLOT_GRACE - 1)]
+    assert cr.held_bg_ids(ss, now, {}) == ["bg"]
+
+
+def test_held_bg_ids_keeps_quiet_background_session_within_grace():
+    now = 1000.0
+    ss = [sess(id="quiet", pane=None, fresh=False, file_mtime=now - 5)]
+    assert cr.held_bg_ids(ss, now, {}) == ["quiet"]
+
+
+def test_bg_session_put_into_a_pane_leaves_the_z_row_for_a_slot():
+    now = 1000.0
+    bg = sess(id="x", pane=None, file_mtime=now)
+    assert cr.held_bg_ids([bg], now, {}) == ["x"]
+    shown = sess(id="x", pane="%7", file_mtime=now)   # same session, now displayed in %7
+    assert cr.held_bg_ids([shown], now, {"%7": "claude"}) == []
+    assert cr.held_ids([shown], now, {"%7": "claude"}) == ["x"]
+
+
+def test_displaced_session_moves_to_z_row_while_its_pane_runs_claude():
+    now = 1000.0
+    # paused parent: its pane %1 now shows another session, so it is not running
+    parent = sess(id="parent", pane="%1", running=False, fresh=False, file_mtime=now - 5)
+    assert cr.held_bg_ids([parent], now, {"%1": "claude"}) == ["parent"]
+    assert cr.held_ids([parent], now, {"%1": "claude"}) == []
+
+
+def test_displaced_session_is_dropped_once_its_pane_is_a_shell():
+    now = 1000.0
+    exited = sess(id="exited", pane="%1", running=False, fresh=False, file_mtime=now - 5)
+    assert cr.held_bg_ids([exited], now, {"%1": "zsh"}) == []
+
+
+def test_displaced_busy_session_stays_working_past_grace():
+    now = 1000.0
+    busy = sess(id="busy", pane="%1", running=False, fresh=False, busy=True, file_mtime=now - 600)
+    assert cr.held_bg_ids([busy], now, {"%1": "claude"}) == ["busy"]
+    m = cr.SlotMap(None, cr.BG_LABELS)
+    m.update(["busy"])
+    assert cr.bg_views([busy], m)[0] == (cr.State.WORKING, False)
+
+
+def test_displaced_subagent_never_gets_a_key():
+    now = 1000.0
+    agent = sess(id="sub", pane="%1", running=False, agent=True, file_mtime=now - 5)
+    assert cr.held_bg_ids([agent], now, {"%1": "claude"}) == []
+
+
+def test_bg_slots_cap_at_ten_and_extra_sessions_get_no_key():
+    m = cr.SlotMap(None, cr.BG_LABELS)
+    m.update([f"s{i}" for i in range(12)])
+    assert sorted(m.slots) == sorted(cr.BG_LABELS)
+    assert m.session_at("Z") == "s0" and m.session_at("/") == "s9"
+
+
+def test_bg_views_show_working_or_idle_never_unread_or_blocked():
+    now = 1000.0
+    m = cr.SlotMap(None, cr.BG_LABELS)
+    m.update(["busy", "idle", "quiet"])
+    ss = [sess(id="busy", pane=None, busy=True, file_mtime=now),
+          sess(id="idle", pane=None, busy=False, file_mtime=now),
+          sess(id="quiet", pane=None, fresh=False, file_mtime=now - 5)]
+    views = cr.bg_views(ss, m)
+    assert views[0] == (cr.State.WORKING, False)
+    assert views[1] == (cr.State.IDLE, False)
+    assert views[2] == (cr.State.IDLE, False)    # quiet within grace: not live, shows idle
+    assert views[3] is None                      # unassigned key
+
+
+def test_render_paints_z_row_from_background_views():
+    names = cr.F_ROW + ["Logo"] + cr.SLOT_KEYS + cr.BG_KEYS
+    s = cr.Stats(ctx=None, h5=None, d7=None, model=None,
+                 bg=((cr.State.WORKING, False),) + (None,) * 9)
+    frame = cr.render(names, s, t=0.0)
+    assert frame[names.index("Key: Z")] == cr.slot_colour((cr.State.WORKING, False), 0.0)
+    assert frame[names.index("Key: X")] == cr.BASE
 
 
 def test_session_state_precedence():

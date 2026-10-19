@@ -18,4 +18,6 @@ if [ -d "$_rgbdir" ] && [[ $input =~ \"session_id\":\"([A-Za-z0-9_-]+)\" ]]; the
     printf '%s' "$_rgbin" > "$_rgbf.$$" 2>/dev/null && mv -f "$_rgbf.$$" "$_rgbf" 2>/dev/null
     # The daemon answers with this session's keyboard slot (Ctrl+Alt+<key>).
     [ -r "$_rgbdir/slots/$_rgbsid" ] && read -r rgbslot < "$_rgbdir/slots/$_rgbsid"
+    # Background sessions (no pane) get a Z-row key instead.
+    [ -r "$_rgbdir/bgslots/$_rgbsid" ] && read -r rgbbg < "$_rgbdir/bgslots/$_rgbsid"
 fi

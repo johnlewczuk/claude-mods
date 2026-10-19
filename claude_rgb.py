@@ -75,6 +75,8 @@ SLOT_LABELS = list("1234567890-=")
 SLOT_KEYS = [f"Key: {k}" for k in SLOT_LABELS]
 NUMPAD = [f"Key: Number Pad {k}" for k in "1234567890"]
 NAV = [f"Key: {k}" for k in ("Insert", "Home", "Page Up", "Delete", "End", "Page Down")]
+BG_LABELS = list("ZXCVBNM,./")        # Z row: sessions with no tmux pane (background)
+BG_KEYS = [f"Key: {k}" for k in BG_LABELS]
 ALARM_AT = 90
 BUSY_MAX_AGE = 15 * 60   # a transcript silent this long is not mid-turn
 SLOT_GRACE = 60          # a slot outlives its session's last statusline write by this
@@ -108,6 +110,7 @@ class Session:
     busy: bool
     blocked: bool
     live: bool               # (fresh or blocked) and running
+    agent: bool              # a background subagent (never gets a key)
     payload: dict = field(compare=False, repr=False)
 
     def state(self, viewed_at: float) -> State:
@@ -131,6 +134,7 @@ class Stats:
     model: Optional[str]
     has_session: bool = True      # False: focused pane holds no Claude session
     slots: tuple[Optional[SlotView], ...] = ()   # aligned with SLOT_KEYS
+    bg: tuple[Optional[SlotView], ...] = ()      # aligned with BG_KEYS
 
 
 # --- rendering ----------------------------------------------------------------
@@ -229,6 +233,8 @@ def render(names: list[str], s: Optional[Stats], t: float) -> list[Colour]:
     bar(frame, names, NUMPAD, s.h5, CYAN, 70, 90)
     bar(frame, names, NAV, s.d7, VIOLET, 50, 80)
     for key, view in zip(SLOT_KEYS, s.slots):
+        paint(frame, names, [key], slot_colour(view, t))
+    for key, view in zip(BG_KEYS, s.bg):
         paint(frame, names, [key], slot_colour(view, t))
     if "Logo" in names:
         frame[names.index("Logo")] = model_colour(s.model) if s.has_session else IDLE_LOGO
@@ -425,7 +431,8 @@ def load_sessions(state_dir: str, max_age: float, now: float,
             id=r["id"], pane=pane, transcript=r["transcript"],
             file_mtime=r["mtime"], activity=r["activity"], fresh=r["fresh"], running=running,
             busy=r["mid_turn"] and (blocked or now - r["activity"] <= BUSY_MAX_AGE),
-            blocked=blocked, live=(r["fresh"] or blocked) and running, payload=r["payload"]))
+            blocked=blocked, live=(r["fresh"] or blocked) and running,
+            agent=is_agent(r["payload"]), payload=r["payload"]))
     return out
 
 
@@ -470,7 +477,8 @@ class LimitClock:
 
 def stats_from(sessions: list[Session], focus: Optional[str],
                slots: tuple[Optional[SlotView], ...] = (),
-               limits: tuple[Optional[float], Optional[float]] = (None, None)) -> Optional[Stats]:
+               limits: tuple[Optional[float], Optional[float]] = (None, None),
+               bg: tuple[Optional[SlotView], ...] = ()) -> Optional[Stats]:
     """Context % and model describe the session in the focused tmux pane.
     A focused pane with no Claude session shows none (has_session=False)
     rather than someone else's; outside tmux (focus None) the most recently
@@ -484,12 +492,12 @@ def stats_from(sessions: list[Session], focus: Optional[str],
     has_session = focus is None or active.pane == focus
     h5, d7 = limits
     if not has_session:
-        return Stats(ctx=None, h5=h5, d7=d7, model=None, has_session=False, slots=slots)
+        return Stats(ctx=None, h5=h5, d7=d7, model=None, has_session=False, slots=slots, bg=bg)
     return Stats(
         ctx=(active.payload.get("context_window") or {}).get("used_percentage"),
         h5=h5, d7=d7,
         model=(active.payload.get("model") or {}).get("display_name"),
-        slots=slots,
+        slots=slots, bg=bg,
     )
 
 
@@ -513,14 +521,15 @@ class SlotMap:
     not reshuffle what you have learned. First free slot wins; a slot is
     released when its session is no longer held."""
 
-    def __init__(self, path: Optional[str] = None):
+    def __init__(self, path: Optional[str] = None, labels: list[str] = SLOT_LABELS):
         self.path = path
+        self.labels = labels
         self.slots: dict[str, str] = {}      # label -> session id
         if path:
             try:
                 with open(path) as fh:
                     data = json.load(fh).get("slots", {})
-                self.slots = {k: v for k, v in data.items() if k in SLOT_LABELS and isinstance(v, str)}
+                self.slots = {k: v for k, v in data.items() if k in labels and isinstance(v, str)}
             except (OSError, ValueError, AttributeError):
                 pass
 
@@ -530,7 +539,7 @@ class SlotMap:
         before = dict(self.slots)
         self.slots = {k: v for k, v in self.slots.items() if v in held}
         taken = set(self.slots.values())
-        free = [k for k in SLOT_LABELS if k not in self.slots]
+        free = [k for k in self.labels if k not in self.slots]
         for sid in held:
             if sid in taken or not free:
                 continue
@@ -589,10 +598,45 @@ def slot_views(sessions: list[Session], slots: SlotMap, focus: Optional[str],
     return tuple(out)
 
 
-def write_slot_labels(state_dir: str, slots: SlotMap) -> None:
+def is_background(s: Session, panes: Mapping[str, str]) -> bool:
+    """Not on screen: no tmux pane at all, or its pane still runs claude but
+    displays another session (the one that was paused when a background
+    session was put into the pane). A pane that went back to a shell (after
+    /exit) does not count."""
+    if s.agent:
+        return False
+    return s.pane is None or (not s.running and panes.get(s.pane) in CLAUDE_COMMANDS)
+
+
+def held_bg_ids(sessions: list[Session], now: float, panes: Mapping[str, str]) -> list[str]:
+    """Background sessions that keep or get a Z-row key: live or busy ones,
+    plus those quiet within the grace period. A displaced session's statusline
+    freezes while another session holds its pane, so busy is what keeps it
+    working on the keyboard. Ordered oldest first so allocation is stable."""
+    keep = [s for s in sessions
+            if is_background(s, panes) and (s.live or s.busy or now - s.file_mtime <= SLOT_GRACE)]
+    return [s.id for s in sorted(keep, key=lambda s: s.file_mtime)]
+
+
+def bg_views(sessions: list[Session], bgslots: SlotMap) -> tuple[Optional[SlotView], ...]:
+    """What each Z-row key shows: working while mid-turn, otherwise idle. A
+    background session never has a pane it could be unread on or blocked in,
+    so ice blue and blue do not occur on this row."""
+    by_id = {s.id: s for s in sessions}
+    out: list[Optional[SlotView]] = []
+    for label in BG_LABELS:
+        s = by_id.get(bgslots.session_at(label) or "")
+        if s is None:
+            out.append(None)
+        else:
+            out.append((State.WORKING if s.busy else State.IDLE, False))
+    return tuple(out)
+
+
+def write_slot_labels(state_dir: str, slots: SlotMap, subdir: str = "slots") -> None:
     """One tiny file per session holding its key label, for the statusline
     to read back (a bash `read`, no fork). Removed when the slot is released."""
-    d = os.path.join(state_dir, "slots")
+    d = os.path.join(state_dir, subdir)
     os.makedirs(d, exist_ok=True)
     want = {sid: label for label, sid in slots.slots.items()}
     for f in os.listdir(d):
@@ -683,6 +727,7 @@ def main() -> int:
     stats_every = 0.5    # tmux lookups (focus, dialog screens) happen at this rate
     os.makedirs(state_dir, exist_ok=True)
     slots = SlotMap(slots_path)
+    bgslots = SlotMap(os.path.join(os.path.dirname(slots_path), "bgslots.json"), BG_LABELS)
     print(f"claude-rgb: state={state_dir} slots={slots_path} server={host}:{port} device~{match!r}", flush=True)
 
     client = dev = None
@@ -716,9 +761,12 @@ def main() -> int:
                 if slots.update(held_ids(sessions, wall, panes)):
                     print(f"claude-rgb: slots {slots.slots}", flush=True)
                 write_slot_labels(state_dir, slots)
+                if bgslots.update(held_bg_ids(sessions, wall, panes)):
+                    print(f"claude-rgb: background {bgslots.slots}", flush=True)
+                write_slot_labels(state_dir, bgslots, "bgslots")
                 limits.observe(sessions, wall)
                 stats = stats_from(sessions, focus, slot_views(sessions, slots, focus, viewed, started),
-                                   limits=limits.latest())
+                                   limits=limits.latest(), bg=bg_views(sessions, bgslots))
                 stats_at = now
             frame = render(names, stats, now)
             if frame != last:

@@ -36,6 +36,7 @@ shortcuts (the lighting works without either).
 | numpad 1..9,0 | 5-hour rate limit used %    | cyan, amber >=70, red >=90     |
 | Ins Home PgUp Del End PgDn | 7-day rate limit used % | violet, amber >=50, red >=80 |
 | Logo          | model                       | Fable violet, Opus amber, Sonnet teal, Haiku green |
+| Z X C V B N M , . /  | one background session per key (no tmux pane, not subagents); no jump | orange breathing = working, grey = idle, off = empty |
 | Escape        | alarm (any stat >= 90 %)    | red; all other keys pulse red  |
 | rest          | idle base                   | off; faint grey = unknown      |
 
