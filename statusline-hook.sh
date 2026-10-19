@@ -6,9 +6,12 @@ _rgbdir="${XDG_RUNTIME_DIR:-/tmp}/claude-rgb"
 if [ -d "$_rgbdir" ] && [[ $input =~ \"session_id\":\"([A-Za-z0-9_-]+)\" ]]; then
     _rgbsid="${BASH_REMATCH[1]}"
     _rgbf="$_rgbdir/$_rgbsid.json"
-    # Tag the payload with our tmux pane so the daemon can follow pane focus.
-    _rgbin="$input"
-    [[ ${TMUX_PANE:-} =~ ^%[0-9]+$ ]] && _rgbin="{\"tmux_pane\":\"$TMUX_PANE\",${input#\{}"
+    # Tag the payload with our tmux pane so the daemon can follow pane focus,
+    # and with claude's pid ($PPID: this script is claude's direct child) so
+    # forks and subagents, whose environment lacks TMUX_PANE, can still be
+    # placed by walking the process tree.
+    _rgbin="{\"claude_pid\":$PPID,${input#\{}"
+    [[ ${TMUX_PANE:-} =~ ^%[0-9]+$ ]] && _rgbin="{\"tmux_pane\":\"$TMUX_PANE\",${_rgbin#\{}"
     printf '%s' "$_rgbin" > "$_rgbf.$$" 2>/dev/null && mv -f "$_rgbf.$$" "$_rgbf" 2>/dev/null
     # The daemon answers with this session's keyboard slot (Ctrl+Alt+<key>).
     [ -r "$_rgbdir/slots/$_rgbsid" ] && read -r rgbslot < "$_rgbdir/slots/$_rgbsid"

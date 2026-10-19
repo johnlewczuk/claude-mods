@@ -3,6 +3,7 @@
 
 Data path:
   Claude Code statusLine hook  -->  $XDG_RUNTIME_DIR/claude-rgb/<session_id>.json
+                                    (payload + tmux_pane + claude_pid)
   this daemon (polls files,    -->  OpenRGB SDK server (TCP 6742)  -->  keyboard
    follows the focused tmux    -->  $XDG_RUNTIME_DIR/claude-rgb/slots/<session_id>
    pane, assigns slots)             (slot key label, read back by the statusline)
@@ -282,11 +283,44 @@ def has_dialog(screen: str) -> bool:
 
 # --- sessions -------------------------------------------------------------------
 
+def parent_pid(pid: int) -> Optional[int]:
+    try:
+        with open(f"/proc/{pid}/stat") as fh:
+            return int(fh.read().rsplit(")", 1)[1].split()[1])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def resolve_pane(pid: Optional[int], pane_pids: Mapping[int, str],
+                 parent_of: Callable[[int], Optional[int]] = parent_pid) -> Optional[str]:
+    """Walk up from a claude pid to the shell a tmux pane started
+    (`pane_pid`), giving the pane. Forks and subagents are child processes
+    without TMUX_PANE in their environment, so this is how they are placed."""
+    seen = 0
+    while pid and pid > 1 and seen < 32:
+        if pid in pane_pids:
+            return pane_pids[pid]
+        pid = parent_of(pid)
+        seen += 1
+    return None
+
+
+def is_agent(payload: dict) -> bool:
+    """Background subagents run inside the parent's process with their own
+    session id; they must not claim the parent's pane."""
+    return bool(payload.get("agent_type") or payload.get("agent"))
+
+
 def load_sessions(state_dir: str, max_age: float, now: float,
-                  dialog_open: Callable[[str], bool], panes: Mapping[str, str]) -> list[Session]:
+                  dialog_open: Callable[[str], bool], panes: Mapping[str, str],
+                  pane_pids: Mapping[int, str] = {},
+                  parent_of: Callable[[int], Optional[int]] = parent_pid) -> list[Session]:
     """One Session per mirror file. A half-written file (statusline
     mid-write) is skipped for this tick. `panes` maps every existing tmux
-    pane id to its foreground command.
+    pane id to its foreground command, `pane_pids` each pane's shell pid to
+    the pane id. A session's pane is its tmux_pane tag if the hook had one,
+    else the pane found by walking up from claude_pid; background agents get
+    none.
 
     A session is `fresh` when the statusline wrote recently, and `running`
     when its pane still runs claude AND it is the newest session in that
@@ -310,13 +344,19 @@ def load_sessions(state_dir: str, max_age: float, now: float,
                 loaded.append((f, os.stat(path).st_mtime, json.load(fh)))
         except (OSError, ValueError):
             continue
+    def pane_of(p: dict) -> Optional[str]:
+        if is_agent(p):
+            return None
+        return p.get("tmux_pane") or resolve_pane(p.get("claude_pid"), pane_pids, parent_of)
+
+    located = [(f, mtime, p, pane_of(p)) for f, mtime, p in loaded]
     newest_in_pane: dict[str, float] = {}
-    for _, mtime, p in loaded:
-        if p.get("tmux_pane"):
-            newest_in_pane[p["tmux_pane"]] = max(newest_in_pane.get(p["tmux_pane"], 0.0), mtime)
+    for _, mtime, _, pane in located:
+        if pane:
+            newest_in_pane[pane] = max(newest_in_pane.get(pane, 0.0), mtime)
     out = []
-    for f, mtime, p in loaded:
-        pane, transcript = p.get("tmux_pane"), p.get("transcript_path")
+    for f, mtime, p, pane in located:
+        transcript = p.get("transcript_path")
         try:
             activity = os.stat(transcript).st_mtime
         except (TypeError, OSError):
@@ -506,16 +546,23 @@ def focused_pane() -> Optional[str]:
     return pane if r.returncode == 0 and pane.startswith("%") else None
 
 
-def live_panes() -> dict[str, str]:
-    """Every pane id tmux currently has -> its foreground command."""
+def live_panes() -> tuple[dict[str, str], dict[int, str]]:
+    """(pane id -> foreground command, pane shell pid -> pane id) for every
+    pane tmux currently has."""
     try:
-        r = subprocess.run(["tmux", "list-panes", "-a", "-F", "#{pane_id} #{pane_current_command}"],
+        r = subprocess.run(["tmux", "list-panes", "-a", "-F", "#{pane_id} #{pane_pid} #{pane_current_command}"],
                            capture_output=True, text=True, timeout=1)
     except (OSError, subprocess.SubprocessError):
-        return {}
-    if r.returncode != 0:
-        return {}
-    return dict(line.split(" ", 1) for line in r.stdout.splitlines() if " " in line)
+        return {}, {}
+    cmds: dict[str, str] = {}
+    pids: dict[int, str] = {}
+    if r.returncode == 0:
+        for line in r.stdout.splitlines():
+            parts = line.split(" ", 2)
+            if len(parts) == 3 and parts[1].isdigit():
+                cmds[parts[0]] = parts[2]
+                pids[int(parts[1])] = parts[0]
+    return cmds, pids
 
 
 def pane_has_dialog(pane: str) -> bool:
@@ -579,8 +626,8 @@ def main() -> int:
                 focus = focused_pane()
                 if focus:
                     viewed[focus] = wall
-                panes = live_panes()
-                sessions = load_sessions(state_dir, max_age, wall, pane_has_dialog, panes)
+                panes, pane_pids = live_panes()
+                sessions = load_sessions(state_dir, max_age, wall, pane_has_dialog, panes, pane_pids)
                 if slots.update(held_ids(sessions, wall, panes)):
                     print(f"claude-rgb: slots {slots.slots}", flush=True)
                 write_slot_labels(state_dir, slots)

@@ -409,3 +409,38 @@ def test_newest_session_in_a_pane_supersedes_older_ones(tmp_path):
     assert not ss["old"].running and not ss["old"].live and not ss["old"].blocked
     assert cr.held_ids(list(ss.values()), now, panes) == ["new"]
     assert cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%1", live_panes=panes).ctx == 3
+
+
+# --- pane from process tree ---------------------------------------------------------
+
+PARENTS = {500: 400, 400: 300, 300: 200, 200: 1, 1: None}   # 500 -> ... -> 200 (a pane's shell) -> init
+PANE_PIDS = {200: "%7"}
+
+
+def test_resolve_pane_walks_up_to_the_pane_shell():
+    assert cr.resolve_pane(500, PANE_PIDS, PARENTS.get) == "%7"
+    assert cr.resolve_pane(200, PANE_PIDS, PARENTS.get) == "%7"
+    assert cr.resolve_pane(999, PANE_PIDS, PARENTS.get) is None      # unknown pid
+    assert cr.resolve_pane(None, PANE_PIDS, PARENTS.get) is None
+    loop = {1: 2, 2: 1}
+    assert cr.resolve_pane(1, PANE_PIDS, loop.get) is None             # never spins forever
+
+
+def test_forks_and_subagents_are_placed_by_pid_not_env(tmp_path):
+    """A fork runs as a child claude process without TMUX_PANE in its
+    environment, so its payload has no tmux_pane; claude_pid (the hook's
+    $PPID) still leads to the pane. A background agent (agent_type set)
+    shares the parent's process and must not claim the pane."""
+    now = time.time()
+    t = tmp_path / "t.jsonl"; t.write_text(jl(USER_PROMPT))
+    write(tmp_path / "parent.json", t, tmux_pane="%7", claude_pid=400, context_window={"used_percentage": 50})
+    write(tmp_path / "fork.json", t, claude_pid=500, context_window={"used_percentage": 5})
+    write(tmp_path / "agent.json", t, claude_pid=400, agent_type="Explore", agent="x")
+    os.utime(tmp_path / "parent.json", (now - 10, now - 10))   # parent paused while the fork is shown
+    panes = {"%7": "claude"}
+    ss = {s.id: s for s in cr.load_sessions(str(tmp_path), 30, now, lambda p: False, panes,
+                                            pane_pids=PANE_PIDS, parent_of=PARENTS.get)}
+    assert ss["fork"].pane == "%7" and ss["fork"].running
+    assert ss["parent"].pane == "%7" and not ss["parent"].running          # superseded by the fork
+    assert ss["agent"].pane is None
+    assert cr.held_ids(list(ss.values()), now, panes) == ["fork"]

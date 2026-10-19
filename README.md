@@ -72,7 +72,8 @@ the session is live (fresh or blocked on a dialog) and for 60 s after it
 goes quiet; a session whose pane is gone or no longer runs claude is
 released at once. Subagents and forks run the statusline too, with their
 own session id and no tmux pane: they feed the rate-limit bars but get no
-slot, since there is nothing to jump to. A 13th session gets no slot
+slot, since there is nothing to jump to. A fork shown in a pane takes the
+pane over from its paused parent (newest file wins) and gets a slot. A 13th session gets no slot
 until one frees. Each session's statusline shows its key as `⌨3`; the daemon
 writes `$XDG_RUNTIME_DIR/claude-rgb/slots/<session_id>` for that.
 
@@ -90,7 +91,10 @@ A GNOME shortcut also works when the terminal is not focused.
 1. `~/.claude/statusline-command.sh` mirrors each payload to
    `$XDG_RUNTIME_DIR/claude-rgb/<session_id>.json` (atomic mv, one bash regex,
    no extra fork).
-   The hook also tags the payload with its `TMUX_PANE`.
+   The hook also tags the payload with its `TMUX_PANE` and claude's pid
+   (`$PPID`); forks and subagents are child processes without `TMUX_PANE`,
+   and the daemon places them by walking the process tree up to the pane's
+   shell (`tmux list-panes -F '#{pane_pid}'`).
 2. `claude_rgb.py` (systemd --user `claude-rgb.service`) polls that dir 2x/s (renders 8x/s),
    asks tmux for the active pane of the most recently used client
    (`tmux display-message -p '#{pane_id}'`) and shows the session in that
