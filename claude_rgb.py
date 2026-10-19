@@ -21,8 +21,9 @@ Layout (Razer Cynosa Chroma, but any keyboard with OpenRGB key names works):
                   grey              idle, seen
                   off               no session in this slot
                 the focused session's key is at full brightness, others dim,
-                and the two keys straddling it on the row below light pale
-                yellow so the three form a triangle
+                and the two keys straddling it on the row below light in the
+                same colour so the three form a triangle; a focused idle
+                session is pale yellow instead of grey
   numpad 1-9,0  5-hour rate limit used %  cyan  / amber / red
   Ins..PgDn     7-day rate limit used %   violet/ amber / red
   Logo          model (Fable violet, Opus amber, Sonnet teal, Haiku green)
@@ -61,7 +62,7 @@ ORANGE: Colour = (255, 70, 0)
 BLUE: Colour = (0, 90, 255)
 SLOT_UNREAD: Colour = (90, 190, 255)   # ice blue, steady (blocked is deep blue, breathing)
 SLOT_GREY: Colour = (130, 130, 150)
-FOCUS: Colour = (255, 225, 110)      # pale yellow: the two keys under the focused slot
+FOCUS_IDLE: Colour = (255, 225, 110)  # pale yellow: the focused session when idle
 
 MODEL_COLOURS: dict[str, Colour] = {
     "fable": (150, 0, 200),
@@ -209,6 +210,8 @@ def slot_colour(view: Optional[SlotView], t: float) -> Colour:
         c = scaled(BLUE, 0.5 + 0.5 * breathe(t, 1.5))
     elif state is State.UNREAD:
         c = SLOT_UNREAD
+    elif focused:
+        return FOCUS_IDLE
     else:
         c = SLOT_GREY
     return c if focused else scaled(c, UNFOCUSED_DIM)
@@ -234,7 +237,7 @@ def render(names: list[str], s: Optional[Stats], t: float) -> list[Colour]:
         colour = slot_colour(view, t)
         paint(frame, names, [key], colour)
         if view is not None and view[1]:
-            paint(frame, names, TRIANGLE[key], FOCUS)
+            paint(frame, names, TRIANGLE[key], colour)
     if "Logo" in names:
         frame[names.index("Logo")] = model_colour(s.model) if s.has_session else IDLE_LOGO
     if alarm and "Key: Escape" in names:
