@@ -438,28 +438,51 @@ def rank(sessions: list[Session], focus: Optional[str]) -> list[Session]:
     return ranked
 
 
+@dataclass
+class LimitClock:
+    """Latest rate-limit reading from any session. Rate limits are account-wide,
+    but a session learns them only from its own API responses, so one payload
+    can carry numbers hours old, and no payload says when they were read. The
+    daemon dates each session's reading by when it first appeared or last
+    changed in its view (it polls at 2 Hz, close to when the statusline runs)."""
+    readings: dict[str, tuple[float, float, Optional[float], Optional[float]]] = field(default_factory=dict)
+    # session id -> (wall time seen, transcript activity, five_hour %, seven_day %)
+
+    def observe(self, sessions: list[Session], wall: float) -> None:
+        for s in sessions:
+            rl = s.payload.get("rate_limits") or {}
+            h5 = (rl.get("five_hour") or {}).get("used_percentage")
+            d7 = (rl.get("seven_day") or {}).get("used_percentage")
+            if h5 is None and d7 is None:
+                continue
+            seen = self.readings.get(s.id)
+            if seen is None or seen[2:] != (h5, d7):
+                self.readings[s.id] = (wall, s.activity, h5, d7)
+
+    def latest(self) -> tuple[Optional[float], Optional[float]]:
+        """(five_hour %, seven_day %) of the most recently dated reading. Ties
+        (sessions first seen in the same tick) go to the most recently active."""
+        if not self.readings:
+            return None, None
+        _, _, h5, d7 = max(self.readings.values(), key=lambda r: r[:2])
+        return h5, d7
+
+
 def stats_from(sessions: list[Session], focus: Optional[str],
-               slots: tuple[Optional[SlotView], ...] = ()) -> Optional[Stats]:
+               slots: tuple[Optional[SlotView], ...] = (),
+               limits: tuple[Optional[float], Optional[float]] = (None, None)) -> Optional[Stats]:
     """Context % and model describe the session in the focused tmux pane.
     A focused pane with no Claude session shows none (has_session=False)
     rather than someone else's; outside tmux (focus None) the most recently
-    active session stands in. Rate limits are account-wide, but a session
-    only learns them from its own API responses, so an idle session carries
-    stale numbers and some carry none: take them from the focused session
-    if it has any, else the most recently active one that does."""
+    active session stands in. `limits` is the account-wide (five_hour, seven_day)
+    reading, supplied by the caller's LimitClock."""
     live = [s for s in sessions if s.live]
     if not live:
         return None
     ranked = rank(live, focus)
     active = ranked[0]
     has_session = focus is None or active.pane == focus
-    h5 = d7 = None
-    for s in ranked:
-        rl = s.payload.get("rate_limits") or {}
-        if rl:
-            h5 = (rl.get("five_hour") or {}).get("used_percentage")
-            d7 = (rl.get("seven_day") or {}).get("used_percentage")
-            break
+    h5, d7 = limits
     if not has_session:
         return Stats(ctx=None, h5=h5, d7=d7, model=None, has_session=False, slots=slots)
     return Stats(
@@ -474,9 +497,13 @@ def pick_stats(state_dir: str, max_age: float, now: Optional[float] = None,
                focus: Optional[str] = None,
                screen_of: Callable[[str], str] = lambda pane: "",
                live_panes: Mapping[str, str] = {}) -> Optional[Stats]:
-    """Convenience: load + stats_from, without slots."""
+    """Convenience: load + stats_from, without slots. One observation only, so
+    the limits come from the most recently active session that reports them."""
     now = time.time() if now is None else now
-    return stats_from(load_sessions(state_dir, max_age, now, screen_of, live_panes), focus)
+    sessions = load_sessions(state_dir, max_age, now, screen_of, live_panes)
+    clock = LimitClock()
+    clock.observe(sessions, now)
+    return stats_from(sessions, focus, limits=clock.latest())
 
 
 # --- slots ------------------------------------------------------------------------
@@ -663,6 +690,7 @@ def main() -> int:
     last: Optional[list[Colour]] = None
     stats, stats_at = None, -1.0
     viewed: dict[str, float] = {}       # pane -> wall time last focused
+    limits = LimitClock()
     started = time.time()
     while True:
         try:
@@ -688,7 +716,9 @@ def main() -> int:
                 if slots.update(held_ids(sessions, wall, panes)):
                     print(f"claude-rgb: slots {slots.slots}", flush=True)
                 write_slot_labels(state_dir, slots)
-                stats = stats_from(sessions, focus, slot_views(sessions, slots, focus, viewed, started))
+                limits.observe(sessions, wall)
+                stats = stats_from(sessions, focus, slot_views(sessions, slots, focus, viewed, started),
+                                   limits=limits.latest())
                 stats_at = now
             frame = render(names, stats, now)
             if frame != last:

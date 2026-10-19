@@ -107,8 +107,12 @@ A GNOME shortcut also works when the terminal is not focused.
    (`tmux display-message -p '#{pane_id}'`) and shows the session in that
    pane. With no Claude there (or no tmux) it falls back to the session whose
    *transcript* changed most recently (file mtime is useless: every session
-   rewrites its file every second). Rate limits come from the first session in
-   that same order that reports any. A frame is pushed only when it changed.
+   rewrites its file every second). Rate limits are account-wide and do not
+   follow focus: the bars show the most recently dated reading from any session.
+   A payload carries no timestamp, so the daemon dates each session's numbers
+   when it first sees them or sees them change (a session's cached numbers are
+   not re-dated just because it is focused or active). A frame is pushed only
+   when it changed.
 3. OpenRGB SDK server (`openrgb-server.service`, extracted AppImage at
    `~/.local/opt/openrgb/squashfs-root/AppRun`, 127.0.0.1:6742, Direct mode).
 

@@ -237,6 +237,25 @@ def test_pick_stats_takes_rate_limits_from_most_recently_active_session_that_has
     assert (s.ctx, s.h5, s.d7, s.model) == (11, 33, 44, None)
 
 
+def test_limits_come_from_newest_reading_not_most_active_session(tmp_path):
+    now = time.time()
+    ta, tb = (tmp_path / f"{n}.jsonl" for n in "ab")
+    touch(ta, "x", 1, now)
+    touch(tb, "x", 60, now)
+    write(tmp_path / "a.json", ta, rate_limits={"five_hour": {"used_percentage": 10}, "seven_day": {"used_percentage": 20}})
+    write(tmp_path / "b.json", tb, rate_limits={"five_hour": {"used_percentage": 33}, "seven_day": {"used_percentage": 44}})
+    clock = cr.LimitClock()
+    clock.observe(cr.load_sessions(str(tmp_path), 30, now, lambda p: "", {}), now)
+    assert clock.latest() == (10, 20)          # first sight ties: most recently active wins
+    # b calls the API and its numbers change; a's stay as they were
+    write(tmp_path / "b.json", tb, rate_limits={"five_hour": {"used_percentage": 50}, "seven_day": {"used_percentage": 60}})
+    clock.observe(cr.load_sessions(str(tmp_path), 30, now + 5, lambda p: "", {}), now + 5)
+    assert clock.latest() == (50, 60)
+    # a unchanged again: still b's reading, not a's older one
+    clock.observe(cr.load_sessions(str(tmp_path), 30, now + 9, lambda p: "", {}), now + 9)
+    assert clock.latest() == (50, 60)
+
+
 def test_pick_stats_ignores_stale_missing_and_half_written(tmp_path):
     write(tmp_path / "a.json", None, context_window={"used_percentage": 11})
     assert cr.pick_stats(str(tmp_path), max_age=30, now=time.time() + 60) is None
