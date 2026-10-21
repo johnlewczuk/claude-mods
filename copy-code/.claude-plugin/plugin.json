@@ -1,0 +1,1 @@
+{ "name": "copy-code", "version": "0.1.0", "description": "Adds a hover-revealed copy button to each code block in assistant replies (fullscreen terminal)" }

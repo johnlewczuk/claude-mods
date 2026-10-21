@@ -1,5 +1,8 @@
 {
   "name": "claude-mods",
   "owner": { "name": "John Lewczuk" },
-  "plugins": [{ "name": "path-links", "source": "./path-links" }]
+  "plugins": [
+    { "name": "path-links", "source": "./path-links" },
+    { "name": "copy-code", "source": "./copy-code" }
+  ]
 }

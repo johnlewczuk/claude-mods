@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# vocalize — speak a short message through the speakers so the user notices
+# a physical/out-of-band action is needed (press a button, unplug a cable...).
+#
+# Usage: vocalize [--home] [--repeat N] [--no-chime] "message"
+#        echo "message" | vocalize
+#
+# --home speaks on another PC instead (its vocalize.cmd, run over SSH).
+#
+# Engines are tried in order: edge (Microsoft neural, online) -> piper (local
+# neural) -> espeak (spd-say). The first one that succeeds wins.
+#
+# Env:   VOCALIZE_MUTE=1            print only, no audio
+#        VOCALIZE_ENGINE=edge|piper|espeak   start the chain at this engine
+#        VOCALIZE_EDGE_VOICE=...    default en-IN-PrabhatNeural
+#        VOCALIZE_PIPER_VOICE=name|path  default en_US-lessac-medium;
+#                                   names resolve in ~/.local/share/vocalize/voices
+#        VOCALIZE_RATE=-10          espeak rate (-100..100)
+#        VOCALIZE_HOME_HOST=...     ssh host --home speaks on (required for it)
+#
+# Never fails the caller: audio problems produce a warning and exit 0.
+
+set -u
+
+repeat=1
+chime=1
+home=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --repeat) repeat="${2:-1}"; shift 2 ;;
+        --no-chime) chime=0; shift ;;
+        --home) home=1; shift ;;
+        -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --) shift; break ;;
+        *) break ;;
+    esac
+done
+
+msg="$*"
+[ -z "$msg" ] && [ ! -t 0 ] && msg="$(cat)"
+if [ -z "$msg" ]; then
+    echo "vocalize: no message given" >&2
+    exit 0
+fi
+
+echo "🔊 $msg"
+[ "${VOCALIZE_MUTE:-0}" = "1" ] && exit 0
+
+warn() { echo "vocalize: $*" >&2; }
+
+# The home PC's vocalize reads the message from stdin, which sidesteps
+# quoting through ssh and cmd.exe.
+if [ "$home" = "1" ]; then
+    if [ -z "${VOCALIZE_HOME_HOST:-}" ]; then
+        warn "--home needs VOCALIZE_HOME_HOST set"
+        exit 0
+    fi
+    opts="--repeat $repeat"
+    [ "$chime" = "0" ] && opts="$opts --no-chime"
+    printf '%s' "$msg" | timeout 30 ssh -o BatchMode=yes -o ConnectTimeout=8 \
+        "$VOCALIZE_HOME_HOST" "vocalize.cmd $opts" >/dev/null \
+        || warn "could not reach the home PC"
+    exit 0
+fi
+
+data_dir="$HOME/.local/share/vocalize"
+venv="$data_dir/venv/bin"
+
+play_chime() {
+    local snd=/usr/share/sounds/freedesktop/stereo/bell.oga
+    [ -f "$snd" ] || return 0
+    if command -v pw-play >/dev/null; then timeout 5 pw-play "$snd" 2>/dev/null
+    elif command -v paplay >/dev/null; then timeout 5 paplay "$snd" 2>/dev/null
+    fi
+}
+
+# Fetch the whole clip before playing, so a network failure falls back
+# cleanly instead of cutting off mid-sentence.
+speak_edge() {
+    [ -x "$venv/edge-tts" ] && command -v ffplay >/dev/null || return 1
+    local mp3 rc=1
+    mp3="$(mktemp --suffix=.mp3)" || return 1
+    if timeout 15 "$venv/edge-tts" --voice "${VOCALIZE_EDGE_VOICE:-en-IN-PrabhatNeural}" \
+        --text "$1" --write-media "$mp3" >/dev/null 2>&1 && [ -s "$mp3" ]; then
+        timeout 60 ffplay -nodisp -autoexit -nostats -loglevel error "$mp3" </dev/null
+        rc=$?
+    fi
+    rm -f "$mp3"
+    return $rc
+}
+
+speak_piper() {
+    local voice="${VOCALIZE_PIPER_VOICE:-en_US-lessac-medium}" model
+    case "$voice" in */*) model="$voice" ;; *) model="$data_dir/voices/$voice.onnx" ;; esac
+    [ -x "$venv/piper" ] && [ -f "$model" ] || return 1
+    printf '%s' "$1" | timeout 60 "$venv/piper" --model "$model" -f - 2>/dev/null \
+        | timeout 60 aplay -q -
+}
+
+speak_espeak() {
+    command -v spd-say >/dev/null || return 1
+    timeout 60 spd-say -w -o espeak-ng -r "${VOCALIZE_RATE:--10}" -- "$1"
+}
+
+engines=(edge piper espeak)
+case "${VOCALIZE_ENGINE:-edge}" in
+    piper) engines=(piper espeak) ;;
+    espeak) engines=(espeak) ;;
+esac
+
+speak() {
+    local e
+    for e in "${engines[@]}"; do
+        "speak_$e" "$1" && return 0
+        warn "$e engine unavailable or failed, trying next"
+    done
+    warn "no TTS engine worked"
+    return 1
+}
+
+[ "$chime" = "1" ] && play_chime
+for ((i = 1; i <= repeat; i++)); do
+    speak "$msg" || break
+    [ "$i" -lt "$repeat" ] && sleep 2
+done
+exit 0
