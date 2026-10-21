@@ -1,0 +1,12 @@
+[Unit]
+Description=Claude Code stats -> keyboard RGB (via OpenRGB)
+After=openrgb-server.service
+Requires=openrgb-server.service
+
+[Service]
+ExecStart=%h/.local/opt/openrgb-claude/venv/bin/python -u %h/.local/opt/openrgb-claude/claude_rgb.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

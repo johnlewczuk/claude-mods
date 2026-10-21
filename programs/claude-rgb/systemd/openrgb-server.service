@@ -1,0 +1,14 @@
+[Unit]
+Description=OpenRGB SDK server (headless, localhost only)
+After=graphical-session.target
+
+[Service]
+# Extracted AppImage (AppRun) so neither FUSE nor the AppImageLauncher binfmt
+# hook is involved; offscreen Qt platform because --server needs no display.
+Environment=QT_QPA_PLATFORM=offscreen
+ExecStart=%h/.local/opt/openrgb/squashfs-root/AppRun --server --server-host 127.0.0.1 --server-port 6742 --noautoconnect
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
