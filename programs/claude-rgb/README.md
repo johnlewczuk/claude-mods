@@ -17,8 +17,8 @@ shortcuts (the lighting works without either).
    (AppImageLauncher's binfmt hook otherwise intercepts it). Check
    `openrgb --list-devices` sees your keyboard; add OpenRGB's udev rules if not.
 2. `./install.sh` creates the venv, installs the two `systemd --user` units,
-   symlinks `claude-goto` into `~/.local/bin` and registers the twelve GNOME
-   shortcuts.
+   symlinks `claude-goto` into `~/.local/bin` and registers the 22 GNOME
+   shortcuts (Ctrl+Alt + the session row and the background row).
 3. Paste `statusline-hook.sh` into your Claude Code statusline script right
    after it reads stdin into `$input` (set `statusLine.command` in
    `~/.claude/settings.json` if you have none; any script that prints a line
@@ -36,7 +36,7 @@ shortcuts (the lighting works without either).
 | numpad 1..9,0 | 5-hour rate limit used %    | cyan, amber >=70, red >=90     |
 | Ins Home PgUp Del End PgDn | 7-day rate limit used % | violet, amber >=50, red >=80 |
 | Logo          | model                       | Fable violet, Opus amber, Sonnet teal, Haiku green |
-| Z X C V B N M , . /  | one background session per key (no tmux pane, not subagents); no jump | orange breathing = working, grey = idle, off = empty |
+| Z X C V B N M , . /  | one background session per key: detached (no tmux pane) or displaced from its pane by another session; not subagents. Ctrl+Alt+<key> brings it into view | orange breathing = working, grey = idle, off = empty |
 | Escape        | alarm (any stat >= 90 %)    | red; all other keys pulse red  |
 | rest          | idle base                   | off; faint grey = unknown      |
 
@@ -85,12 +85,21 @@ pane over from its paused parent (newest file wins) and gets a slot. A 13th sess
 until one frees. Each session's statusline shows its key as `⌨3`; the daemon
 writes `$XDG_RUNTIME_DIR/claude-rgb/slots/<session_id>` for that.
 
-`claude-goto <key>` (in ~/.local/bin) reads the map and runs
+`claude-goto <key>` (in ~/.local/bin) reads `$XDG_RUNTIME_DIR/claude-rgb/targets.json`
+(key label -> session + pane, written by the daemon for both rows) and runs
 `tmux switch-client -t <pane>` on the most recently used tmux client, then
 `wmctrl -xa gnome-terminal-server.Gnome-terminal` to raise the terminal.
-It is bound to Ctrl+Alt+1..0,-,= as GNOME custom shortcuts (gsettings
-`org.gnome.settings-daemon.plugins.media-keys custom-keybindings`,
-entries `claude-goto-0..11`). Why not a tmux binding: gnome-terminal
+A displaced Z-row session jumps to its pane; switch to it inside Claude
+there. A detached one (no pane) is looked up in `claude agents --json`
+(`claude attach` takes the job id, not the session id) and opened with
+`claude attach <job>` in a new window of the client's tmux session. That
+pane is tagged `@claude_session=<session_id>`: the attached session's own
+process knows no pane, so the tag is how the daemon places it there, and
+it moves to a number-row slot while attached. Ctrl+Z detaches, which ends
+`attach` and closes the window; the session drops back to the Z row.
+It is bound to Ctrl+Alt+1..0,-,= and Ctrl+Alt+Z..M , . / as GNOME custom
+shortcuts (gsettings `org.gnome.settings-daemon.plugins.media-keys
+custom-keybindings`, entries `claude-goto-0..21`). Why not a tmux binding: gnome-terminal
 collapses Ctrl+Alt+<digit> to Alt+<digit> and drops Ctrl+<digit> entirely
 (tested with tmux 3.4 + extended-keys on), so tmux never sees the chord.
 A GNOME shortcut also works when the terminal is not focused.

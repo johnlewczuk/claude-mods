@@ -6,9 +6,12 @@ Data path:
                                     (payload + tmux_pane + claude_pid)
   this daemon (polls files,    -->  OpenRGB SDK server (TCP 6742)  -->  keyboard
    follows the focused tmux    -->  $XDG_RUNTIME_DIR/claude-rgb/slots/<session_id>
-   pane, assigns slots)             (slot key label, read back by the statusline)
-                               -->  ~/.local/state/claude-rgb/slots.json
-                                    (persistent slot map, read by claude-goto)
+   pane, assigns slots)             (slot key label, read back by the statusline;
+                                    bgslots/<session_id> for the Z row)
+                               -->  $XDG_RUNTIME_DIR/claude-rgb/targets.json
+                                    (key label -> session + pane, read by claude-goto)
+                               -->  ~/.local/state/claude-rgb/{slots,bgslots}.json
+                                    (persistent slot maps)
 
 Layout (Razer Cynosa Chroma, but any keyboard with OpenRGB key names works):
   F1-F12        context window used %     green / amber / red
@@ -253,6 +256,7 @@ def busy_from_transcript(path: Optional[str], now: Optional[float] = None,
       assistant (tool_use etc.)  -> tool running or streaming   -> busy
       system/turn_duration       -> turn finished               -> idle
       '[Request interrupted ...' -> user hit Esc                -> idle
+      continued-in               -> session handed off elsewhere -> idle
     Metadata rows (ai-title, mode, api-request, ...) are skipped.
     max_age=None disables the silence cap (a dialog can sit for hours)."""
     now = time.time() if now is None else now
@@ -274,6 +278,8 @@ def busy_from_transcript(path: Optional[str], now: Optional[float] = None,
             continue
         kind = e.get("type")
         if kind == "system" and e.get("subtype") == "turn_duration":
+            return False
+        if kind == "continued-in":
             return False
         if kind == "assistant":
             return True
@@ -357,14 +363,16 @@ def pane_owner(cands: list[Candidate], screen: str) -> Candidate:
 def load_sessions(state_dir: str, max_age: float, now: float,
                   screen_of: Callable[[str], str], panes: Mapping[str, str],
                   pane_pids: Mapping[int, str] = {},
-                  parent_of: Callable[[int], Optional[int]] = parent_pid) -> list[Session]:
+                  parent_of: Callable[[int], Optional[int]] = parent_pid,
+                  pane_tags: Mapping[str, str] = {}) -> list[Session]:
     """One Session per mirror file. A half-written file (statusline
     mid-write) is skipped for this tick. `panes` maps every existing tmux
     pane id to its foreground command, `pane_pids` each pane's shell pid to
-    the pane id, and screen_of(pane) returns the pane's visible text (it is
-    only called for panes that need it). A session's pane is its tmux_pane
-    tag if the hook had one, else the pane found by walking up from
-    claude_pid; background agents get none.
+    the pane id, `pane_tags` pane id -> the session claude-goto attached
+    there, and screen_of(pane) returns the pane's visible text (it is only
+    called for panes that need it). A session's pane is its tmux_pane tag if
+    the hook had one, else a pane tagged with its id, else the pane found by
+    walking up from claude_pid; background agents get none.
 
     A session is `fresh` when the statusline wrote recently, and `running`
     when its pane still runs claude AND it is the session that pane displays
@@ -387,20 +395,25 @@ def load_sessions(state_dir: str, max_age: float, now: float,
                 loaded.append((f, os.stat(path).st_mtime, json.load(fh)))
         except (OSError, ValueError):
             continue
+    attached = {sid: pane for pane, sid in pane_tags.items()}
+
     def pane_of(p: dict) -> Optional[str]:
         if is_agent(p):
             return None
-        return p.get("tmux_pane") or resolve_pane(p.get("claude_pid"), pane_pids, parent_of)
+        return (p.get("tmux_pane") or attached.get(p.get("session_id") or "")
+                or resolve_pane(p.get("claude_pid"), pane_pids, parent_of))
 
     rows = []
     for f, mtime, p in loaded:
+        if not isinstance(p, dict) or not p.get("session_id"):
+            continue    # not a mirror file (targets.json lives here too)
         transcript = p.get("transcript_path")
         try:
             activity = os.stat(transcript).st_mtime
         except (TypeError, OSError):
             activity = mtime
         rows.append(dict(
-            id=p.get("session_id") or f[:-5], pane=pane_of(p), transcript=transcript,
+            id=p["session_id"], pane=pane_of(p), transcript=transcript,
             mtime=mtime, activity=activity, fresh=now - mtime <= max_age,
             mid_turn=busy_from_transcript(transcript, now, max_age=None), payload=p))
 
@@ -657,6 +670,30 @@ def write_slot_labels(state_dir: str, slots: SlotMap, subdir: str = "slots") -> 
             fh.write(label + "\n")
 
 
+def jump_targets(sessions: list[Session], *maps: SlotMap) -> dict[str, dict]:
+    """label -> {"session": id, "pane": pane id or None} for every assigned
+    key, read by claude-goto. A null pane is a detached background session,
+    which claude-goto opens with `claude attach` in a new tmux window."""
+    pane_of = {s.id: s.pane for s in sessions}
+    return {label: {"session": sid, "pane": pane_of.get(sid)}
+            for m in maps for label, sid in m.slots.items()}
+
+
+def write_targets(state_dir: str, targets: dict[str, dict]) -> None:
+    """Atomically replace targets.json, only when it changed."""
+    path = os.path.join(state_dir, "targets.json")
+    try:
+        with open(path) as fh:
+            if json.load(fh) == targets:
+                return
+    except (OSError, ValueError):
+        pass
+    tmp = f"{path}.{os.getpid()}"
+    with open(tmp, "w") as fh:
+        json.dump(targets, fh)
+    os.replace(tmp, path)
+
+
 # --- tmux ------------------------------------------------------------------------
 
 def focused_pane() -> Optional[str]:
@@ -673,23 +710,35 @@ def focused_pane() -> Optional[str]:
     return pane if r.returncode == 0 and pane.startswith("%") else None
 
 
-def live_panes() -> tuple[dict[str, str], dict[int, str]]:
-    """(pane id -> foreground command, pane shell pid -> pane id) for every
-    pane tmux currently has."""
-    try:
-        r = subprocess.run(["tmux", "list-panes", "-a", "-F", "#{pane_id} #{pane_pid} #{pane_current_command}"],
-                           capture_output=True, text=True, timeout=1)
-    except (OSError, subprocess.SubprocessError):
-        return {}, {}
+PANES_FORMAT = "#{pane_id}\t#{pane_pid}\t#{@claude_session}\t#{pane_current_command}"
+
+
+def parse_panes(out: str) -> tuple[dict[str, str], dict[int, str], dict[str, str]]:
+    """`tmux list-panes -F PANES_FORMAT` output -> (pane id -> foreground
+    command, pane shell pid -> pane id, pane id -> @claude_session tag).
+    claude-goto tags the windows it opens with `claude attach`, since the
+    attached session's own process (and so its payload) knows no pane."""
     cmds: dict[str, str] = {}
     pids: dict[int, str] = {}
-    if r.returncode == 0:
-        for line in r.stdout.splitlines():
-            parts = line.split(" ", 2)
-            if len(parts) == 3 and parts[1].isdigit():
-                cmds[parts[0]] = parts[2]
-                pids[int(parts[1])] = parts[0]
-    return cmds, pids
+    tags: dict[str, str] = {}
+    for line in out.splitlines():
+        parts = line.split("\t", 3)
+        if len(parts) == 4 and parts[1].isdigit():
+            cmds[parts[0]] = parts[3]
+            pids[int(parts[1])] = parts[0]
+            if parts[2]:
+                tags[parts[0]] = parts[2]
+    return cmds, pids, tags
+
+
+def live_panes() -> tuple[dict[str, str], dict[int, str], dict[str, str]]:
+    """parse_panes() for every pane tmux currently has."""
+    try:
+        r = subprocess.run(["tmux", "list-panes", "-a", "-F", PANES_FORMAT],
+                           capture_output=True, text=True, timeout=1)
+    except (OSError, subprocess.SubprocessError):
+        return {}, {}, {}
+    return parse_panes(r.stdout) if r.returncode == 0 else ({}, {}, {})
 
 
 def pane_screen(pane: str) -> str:
@@ -756,14 +805,16 @@ def main() -> int:
                 focus = focused_pane()
                 if focus:
                     viewed[focus] = wall
-                panes, pane_pids = live_panes()
-                sessions = load_sessions(state_dir, max_age, wall, pane_screen, panes, pane_pids)
+                panes, pane_pids, pane_tags = live_panes()
+                sessions = load_sessions(state_dir, max_age, wall, pane_screen, panes, pane_pids,
+                                         pane_tags=pane_tags)
                 if slots.update(held_ids(sessions, wall, panes)):
                     print(f"claude-rgb: slots {slots.slots}", flush=True)
                 write_slot_labels(state_dir, slots)
                 if bgslots.update(held_bg_ids(sessions, wall, panes)):
                     print(f"claude-rgb: background {bgslots.slots}", flush=True)
                 write_slot_labels(state_dir, bgslots, "bgslots")
+                write_targets(state_dir, jump_targets(sessions, slots, bgslots))
                 limits.observe(sessions, wall)
                 stats = stats_from(sessions, focus, slot_views(sessions, slots, focus, viewed, started),
                                    limits=limits.latest(), bg=bg_views(sessions, bgslots))

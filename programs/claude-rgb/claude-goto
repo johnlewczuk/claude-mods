@@ -1,18 +1,33 @@
 #!/bin/bash
-# claude-goto <slot-label>: jump the terminal to the tmux pane of the Claude
-# session that owns this keyboard slot (see claude_rgb.py). Bound to
-# Ctrl+Alt+<key> as a GNOME global shortcut, so it works from any window:
-# gnome-terminal collapses Ctrl+Alt+<digit> to Alt+<digit>, which is why
-# this is not a tmux binding.
+# claude-goto <key label>: bring the Claude session on that keyboard key into
+# view (see claude_rgb.py). Bound to Ctrl+Alt+<key> as a GNOME global
+# shortcut, so it works from any window: gnome-terminal collapses
+# Ctrl+Alt+<digit> to Alt+<digit>, which is why this is not a tmux binding.
+#
+# The daemon publishes targets.json: label -> {session, pane}. A session with
+# a pane gets that pane. A detached background session (Z row, no pane) is
+# opened with `claude attach` in a new tmux window, tagged @claude_session so
+# the daemon knows which session that pane shows; Ctrl+Z detaches and closes it.
 set -u
-label=${1:?slot label}
-slots=${CLAUDE_RGB_SLOTS:-${XDG_STATE_HOME:-$HOME/.local/state}/claude-rgb/slots.json}
+label=${1:?key label}
 state=${CLAUDE_RGB_STATE_DIR:-${XDG_RUNTIME_DIR:-/tmp}/claude-rgb}
+claude=$(command -v claude || echo "$HOME/.local/bin/claude")
 
-sid=$(jq -r --arg k "$label" '.slots[$k] // empty' "$slots" 2>/dev/null) || exit 0
-[ -n "$sid" ] || exit 0                                  # empty slot: nothing to do
-pane=$(jq -r '.tmux_pane // empty' "$state/$sid.json" 2>/dev/null)
-[ -n "$pane" ] || exit 0
+target=$(jq -c --arg k "$label" '.[$k] // empty' "$state/targets.json" 2>/dev/null)
+[ -n "$target" ] || exit 0                               # empty key: nothing to do
+sid=$(jq -r '.session' <<<"$target")
+pane=$(jq -r '.pane // empty' <<<"$target")
+
+if [ -z "$pane" ]; then
+    # attach takes the background job id, not the session id
+    job=$("$claude" agents --json 2>/dev/null |
+          jq -r --arg s "$sid" 'first(.[] | select(.sessionId == $s) | .id) // empty')
+    [ -n "$job" ] || exit 0
+    # New window in the session of the most recently used client.
+    session=$(tmux display-message -p '#{client_session}' 2>/dev/null) || exit 0
+    pane=$(tmux new-window -t "$session:" -P -F '#{pane_id}' "$claude attach $job") || exit 0
+    tmux set-option -p -t "$pane" @claude_session "$sid"
+fi
 
 # switch-client -t <pane> changes session, window and pane of the most
 # recently used client; then bring that terminal window to the front.

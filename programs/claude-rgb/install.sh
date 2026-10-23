@@ -16,15 +16,17 @@ done
 systemctl --user daemon-reload
 systemctl --user enable --now openrgb-server.service claude-rgb.service
 
-# Ctrl+Alt+<slot key> -> claude-goto, as GNOME global shortcuts (see README
-# for why these cannot be tmux bindings).
+# Ctrl+Alt+<key> -> claude-goto for the session row (1..=) and the background
+# row (Z../), as GNOME global shortcuts (see README for why these cannot be
+# tmux bindings). Each entry is <GNOME key name>:<label claude_rgb.py uses>.
 base=/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings
 if command -v gsettings >/dev/null; then
     existing=$(gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings | tr -d "[]' " | tr ',' '\n' | grep -v '^$' | grep -v claude-goto || true)
     paths=()
     i=0
-    for k in 1 2 3 4 5 6 7 8 9 0 minus equal; do
-        label=$k; [ "$k" = minus ] && label='-'; [ "$k" = equal ] && label='='
+    for kl in 1:1 2:2 3:3 4:4 5:5 6:6 7:7 8:8 9:9 0:0 minus:- equal:= \
+              z:Z x:X c:C v:V b:B n:N m:M comma:, period:. slash:/; do
+        k=${kl%%:*} label=${kl#*:}
         p="$base/claude-goto-$i/"; paths+=("$p")
         s="org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$p"
         gsettings set "$s" name "claude-goto $label"

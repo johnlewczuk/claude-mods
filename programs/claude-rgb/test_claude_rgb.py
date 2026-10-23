@@ -149,6 +149,7 @@ ASSIST_END = {"type": "assistant", "message": {"role": "assistant", "stop_reason
 TURN_DONE = {"type": "system", "subtype": "turn_duration"}
 META = {"type": "ai-title"}
 INTERRUPTED = {"type": "user", "message": {"role": "user", "content": "[Request interrupted by user]"}}
+HANDOFF = {"type": "continued-in", "continuedInSessionId": "other"}
 
 
 def test_busy_when_turn_in_progress(tmp_path):
@@ -168,6 +169,14 @@ def test_idle_after_turn_ends_or_interrupt(tmp_path):
     t.write_text(jl(USER_PROMPT, ASSIST_TOOL, INTERRUPTED))
     assert cr.busy_from_transcript(str(t)) is False
     assert cr.busy_from_transcript(str(tmp_path / "nope.jsonl")) is False
+
+
+def test_idle_after_session_handed_off_even_with_recent_writes(tmp_path):
+    # the handoff row is written after the last turn row, and later metadata
+    # rows (cost-state) keep the file fresh: it must still read as idle
+    t = tmp_path / "t.jsonl"
+    t.write_text(jl(USER_PROMPT, ASSIST_TOOL, HANDOFF, {"type": "cost-state"}))
+    assert cr.busy_from_transcript(str(t)) is False
 
 
 def test_stale_transcript_is_not_busy(tmp_path):
@@ -597,3 +606,88 @@ def test_two_refreshing_background_sessions_in_one_pane_do_not_flap(tmp_path):
                                                 pane_pids=PANE_PIDS, parent_of=PARENTS.get)}
         assert ss["b"].running and not ss["a"].running
         assert cr.held_ids(list(ss.values()), now, panes) == ["b"]
+
+
+# --- jumping to Z-row sessions ------------------------------------------------------
+
+def test_parse_panes_reads_command_pid_and_attach_tag():
+    out = "%1\t100\t\tclaude\n%2\t200\tsid-x\tclaude\n%3\t300\t\tbash\nbroken line\n"
+    cmds, pids, tags = cr.parse_panes(out)
+    assert cmds == {"%1": "claude", "%2": "claude", "%3": "bash"}
+    assert pids == {100: "%1", 200: "%2", 300: "%3"}
+    assert tags == {"%2": "sid-x"}
+
+
+def test_attached_background_session_lives_in_its_tagged_pane(tmp_path):
+    # a detached session's payload has no tmux_pane and its process hangs off
+    # systemd; claude-goto's @claude_session tag on the attach pane places it
+    now = time.time()
+    write(tmp_path / "bg.json")
+    panes = {"%9": "claude"}
+    ss = cr.load_sessions(str(tmp_path), 30, now, lambda p: "", panes, pane_tags={"%9": "bg"})
+    (s,) = ss
+    assert (s.pane, s.running, s.live) == ("%9", True, True)
+    assert cr.held_ids(ss, now, panes) == ["bg"]
+    assert cr.held_bg_ids(ss, now, panes) == []
+    # detached again (the attach window closed): back to the Z row
+    ss = cr.load_sessions(str(tmp_path), 30, now, lambda p: "", {})
+    assert cr.held_bg_ids(ss, now, {}) == ["bg"]
+
+
+def test_jump_targets_cover_both_rows_with_pane_or_null():
+    slots, bgslots = cr.SlotMap(), cr.SlotMap(None, cr.BG_LABELS)
+    slots.update(["main"])
+    bgslots.update(["detached", "displaced"])
+    ss = [sess(id="main", pane="%1"), sess(id="detached", pane=None),
+          sess(id="displaced", pane="%2", running=False)]
+    assert cr.jump_targets(ss, slots, bgslots) == {
+        "1": {"session": "main", "pane": "%1"},
+        "Z": {"session": "detached", "pane": None},
+        "X": {"session": "displaced", "pane": "%2"},
+    }
+
+
+def run_goto(tmp_path, label, targets):
+    """Run claude-goto against stub tmux/claude/wmctrl; return the tmux calls."""
+    import subprocess
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    log = tmp_path / "tmux.log"
+    (stub / "tmux").write_text(
+        '#!/bin/bash\necho "$*" >> "%s"\n'
+        'case "$1" in display-message) echo main;; new-window) echo %%42;; esac\n' % log)
+    (stub / "claude").write_text(
+        "#!/bin/bash\n"
+        """echo '[{"id":"job7","sessionId":"detached"},{"id":"job8","sessionId":"other"}]'\n""")
+    (stub / "wmctrl").write_text("#!/bin/bash\n")
+    for f in stub.iterdir():
+        f.chmod(0o755)
+    (tmp_path / "targets.json").write_text(json.dumps(targets))
+    goto = os.path.join(os.path.dirname(cr.__file__), "claude-goto")
+    env = dict(os.environ, PATH=f"{stub}:{os.environ['PATH']}", CLAUDE_RGB_STATE_DIR=str(tmp_path))
+    subprocess.run([goto, label], env=env, check=True, timeout=10)
+    return log.read_text().splitlines() if log.exists() else []
+
+
+def test_goto_switches_to_the_pane_of_a_session_that_has_one(tmp_path):
+    calls = run_goto(tmp_path, "X", {"X": {"session": "displaced", "pane": "%2"}})
+    assert calls == ["switch-client -t %2"]
+
+
+def test_goto_attaches_a_detached_session_in_a_new_tagged_window(tmp_path):
+    calls = run_goto(tmp_path, "Z", {"Z": {"session": "detached", "pane": None}})
+    assert calls[0] == "display-message -p #{client_session}"
+    assert calls[1].startswith("new-window -t main: -P -F #{pane_id} ") and calls[1].endswith(" attach job7")
+    assert calls[2:] == ["set-option -p -t %42 @claude_session detached", "switch-client -t %42"]
+
+
+def test_goto_does_nothing_for_an_empty_key(tmp_path):
+    assert run_goto(tmp_path, "C", {}) == []
+
+
+def test_load_sessions_ignores_targets_json_and_other_non_mirror_files(tmp_path):
+    now = time.time()
+    write(tmp_path / "real.json")
+    cr.write_targets(str(tmp_path), {"Z": {"session": "real", "pane": None}})
+    (tmp_path / "list.json").write_text("[1, 2]")
+    assert [s.id for s in cr.load_sessions(str(tmp_path), 30, now, lambda p: "", {})] == ["real"]
