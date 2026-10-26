@@ -105,11 +105,11 @@ def test_slot_keys_show_state_colours_and_focus_brightness():
     k1, k2, k3, k4, k5 = (idx(f"Key: {c}") for c in "12345")
     assert a[k1][0] > a[k1][2] and a[k1] != b[k1]              # orange, breathing
     assert a[k2][2] > a[k2][0] and a[k2] != b[k2]              # blue, breathing
-    assert a[k3] == cr.scaled(cr.SLOT_UNREAD, cr.UNFOCUSED_DIM)   # ice blue, dimmed (not focused)
+    assert a[k3] == cr.scaled(cr.BLUE, cr.UNFOCUSED_DIM)   # steady blue, dimmed (not focused)
     assert a[k4] == cr.scaled(cr.SLOT_GREY, cr.UNFOCUSED_DIM)
     assert a[k5] == cr.BASE                                    # empty slot
     focused_unread = cr.render(NAMES, stats(slots=((State.UNREAD, True),)), t=0.0)
-    assert focused_unread[k1] == cr.SLOT_UNREAD
+    assert focused_unread[k1] == cr.BLUE
 
 
 def test_focused_idle_slot_is_white_and_nothing_below_it_lights():
