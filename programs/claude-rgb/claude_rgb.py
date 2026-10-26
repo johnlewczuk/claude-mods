@@ -296,7 +296,9 @@ def busy_from_transcript(path: Optional[str], now: Optional[float] = None,
                                     background agents still run -> busy
       '[Request interrupted ...' -> user hit Esc                -> idle
       continued-in               -> session handed off elsewhere -> idle
-    Metadata rows (ai-title, mode, api-request, ...) are skipped.
+    Metadata rows (ai-title, mode, api-request, ...) are skipped, and so is
+    a compaction summary: it is written as a user row but is no prompt, and
+    compaction happens both between turns and mid-turn.
     max_age=None disables the silence cap (a dialog can sit for hours)."""
     now = time.time() if now is None else now
     if not path:
@@ -322,7 +324,7 @@ def busy_from_transcript(path: Optional[str], now: Optional[float] = None,
             return False
         if kind == "assistant":
             return True
-        if kind == "user":
+        if kind == "user" and not e.get("isCompactSummary"):
             content = (e.get("message") or {}).get("content")
             return not (isinstance(content, str) and content.startswith("[Request interrupted"))
     return False

@@ -196,6 +196,18 @@ def test_subagent_writes_keep_a_waiting_session_working(tmp_path):
     assert load().activity == now - 3600
 
 
+def test_compaction_does_not_change_turn_state(tmp_path):
+    """Compaction writes its summary as a user row, idle or mid-turn."""
+    boundary = {"type": "system", "subtype": "compact_boundary"}
+    summary = {"type": "user", "isCompactSummary": True,
+               "message": {"role": "user", "content": "This session is being continued ..."}}
+    t = tmp_path / "t.jsonl"
+    t.write_text(jl(USER_PROMPT, ASSIST_END, TURN_DONE, boundary, summary, {"type": "attachment"}, META))
+    assert cr.busy_from_transcript(str(t)) is False
+    t.write_text(jl(USER_PROMPT, ASSIST_TOOL, boundary, summary))
+    assert cr.busy_from_transcript(str(t)) is True
+
+
 def test_idle_after_session_handed_off_even_with_recent_writes(tmp_path):
     # the handoff row is written after the last turn row, and later metadata
     # rows (cost-state) keep the file fresh: it must still read as idle
