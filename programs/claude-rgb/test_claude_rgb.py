@@ -171,6 +171,31 @@ def test_idle_after_turn_ends_or_interrupt(tmp_path):
     assert cr.busy_from_transcript(str(tmp_path / "nope.jsonl")) is False
 
 
+def test_busy_while_turn_ended_with_background_agents_pending(tmp_path):
+    t = tmp_path / "t.jsonl"
+    t.write_text(jl(USER_PROMPT, ASSIST_END, dict(TURN_DONE, pendingBackgroundAgentCount=2), META))
+    assert cr.busy_from_transcript(str(t)) is True
+    t.write_text(jl(USER_PROMPT, ASSIST_END, dict(TURN_DONE, pendingBackgroundAgentCount=0)))
+    assert cr.busy_from_transcript(str(t)) is False
+
+
+def test_subagent_writes_keep_a_waiting_session_working(tmp_path):
+    """While background agents run, only their transcripts change; the
+    parent's goes silent for as long as they take."""
+    now = time.time()
+    t = tmp_path / "w.jsonl"
+    touch(t, jl(ASSIST_END, dict(TURN_DONE, pendingBackgroundAgentCount=1)), 3600, now)
+    write(tmp_path / "w.json", t, tmux_pane="%1")
+    load = lambda: cr.load_sessions(str(tmp_path), 30, now, lambda p: "", {"%1": "claude"})[0]
+    assert load().busy is False                    # silent an hour, nothing else to go on
+    (tmp_path / "w" / "subagents").mkdir(parents=True)
+    touch(tmp_path / "w" / "subagents" / "agent-a1.jsonl", jl(ASSIST_TOOL), 5, now)
+    s = load()
+    assert s.busy is True and s.state(viewed_at=now) is cr.State.WORKING
+    touch(t, jl(ASSIST_END, TURN_DONE), 3600, now)  # turn over: subagents no longer count
+    assert load().activity == now - 3600
+
+
 def test_idle_after_session_handed_off_even_with_recent_writes(tmp_path):
     # the handoff row is written after the last turn row, and later metadata
     # rows (cost-state) keep the file fresh: it must still read as idle

@@ -32,7 +32,7 @@ shortcuts (the lighting works without either).
 | Keys          | Stat                        | Colour                         |
 |---------------|-----------------------------|--------------------------------|
 | F1..F12       | context window used % of the session in the focused pane (dark if that pane has no Claude session) | green, amber >=60, red >=80 |
-| 1..0 - =      | one Claude session per key ("slot"); Ctrl+Alt+<key> jumps to it | orange breathing = working, blue breathing = blocked on you, steady blue = finished since you last looked, grey = idle/seen, off = empty. Focused session full brightness (white when idle), others dim |
+| 1..0 - =      | one Claude session per key ("slot"); Ctrl+Alt+<key> jumps to it | orange breathing = working (or waiting for its background agents), blue breathing = blocked on you, steady blue = finished since you last looked, grey = idle/seen, off = empty. Focused session full brightness (white when idle), others dim |
 | numpad 1..9,0 | 5-hour rate limit used %    | cyan, amber >=70, red >=90     |
 | Ins Home PgUp Del End PgDn | 7-day rate limit used % | violet, amber >=50, red >=80 |
 | Logo          | model                       | Fable violet, Opus amber, Sonnet teal, Haiku green |
@@ -45,8 +45,12 @@ No fresh session for 30 s -> everything off, dim logo.
 
 "Mid-turn" is read from the session's transcript tail: the last turn-state
 entry is a user prompt / tool_result or an assistant message -> busy; a
-`system/turn_duration` row or "[Request interrupted" -> idle. A transcript
-silent for 15 min is never busy.
+`system/turn_duration` row or "[Request interrupted" -> idle, except that a
+`turn_duration` with a non-zero `pendingBackgroundAgentCount` is still busy:
+the session is waiting for its background agents and will pick up their
+results in a new turn. A session silent for 15 min is never busy; while it is
+mid-turn, writes to its subagents' transcripts (`<session>/subagents/`) count
+as it doing something.
 
 "Blocked on you" cannot be read from the transcript (a pending permission
 prompt looks exactly like a slow tool) and no hook fires when a dialog is

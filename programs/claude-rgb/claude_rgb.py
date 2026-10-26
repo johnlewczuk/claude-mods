@@ -19,7 +19,8 @@ Layout (Razer Cynosa Chroma, but any keyboard with OpenRGB key names works):
                 pane holds no Claude session)
   1..0 - =      one key per Claude session (its "slot", stable for the
                 session's lifetime, Ctrl+Alt+<key> jumps to its tmux pane):
-                  orange breathing  working (mid-turn)
+                  orange breathing  working (mid-turn, or waiting for its
+                                    background agents)
                   blue breathing    blocked on you (permission, question, ...)
                   blue (steady)     finished since you last looked at it
                   grey              idle, seen
@@ -290,7 +291,9 @@ def busy_from_transcript(path: Optional[str], now: Optional[float] = None,
     last entry that says anything about turn state:
       user prompt / tool_result  -> Claude owes a response      -> busy
       assistant (tool_use etc.)  -> tool running or streaming   -> busy
-      system/turn_duration       -> turn finished               -> idle
+      system/turn_duration       -> turn finished               -> idle,
+                                    unless pendingBackgroundAgentCount says
+                                    background agents still run -> busy
       '[Request interrupted ...' -> user hit Esc                -> idle
       continued-in               -> session handed off elsewhere -> idle
     Metadata rows (ai-title, mode, api-request, ...) are skipped.
@@ -314,7 +317,7 @@ def busy_from_transcript(path: Optional[str], now: Optional[float] = None,
             continue
         kind = e.get("type")
         if kind == "system" and e.get("subtype") == "turn_duration":
-            return False
+            return bool(e.get("pendingBackgroundAgentCount"))
         if kind == "continued-in":
             return False
         if kind == "assistant":
@@ -323,6 +326,18 @@ def busy_from_transcript(path: Optional[str], now: Optional[float] = None,
             content = (e.get("message") or {}).get("content")
             return not (isinstance(content, str) and content.startswith("[Request interrupted"))
     return False
+
+
+def subagent_activity(transcript: Optional[str]) -> float:
+    """Newest mtime of a session's subagent transcripts, which Claude Code
+    keeps in <transcript without .jsonl>/subagents/; 0 if there are none."""
+    if not transcript:
+        return 0.0
+    try:
+        with os.scandir(os.path.join(transcript.removesuffix(".jsonl"), "subagents")) as it:
+            return max((e.stat().st_mtime for e in it if e.name.endswith(".jsonl")), default=0.0)
+    except OSError:
+        return 0.0
 
 
 def has_dialog(screen: str) -> bool:
@@ -457,10 +472,15 @@ def load_sessions(state_dir: str, max_age: float, now: float,
             activity = os.stat(transcript).st_mtime
         except (TypeError, OSError):
             activity = mtime
+        mid_turn = busy_from_transcript(transcript, now, max_age=None)
+        if mid_turn:
+            # Subagents (foreground or background) work while the session's
+            # own transcript stays silent; their writes are its activity.
+            activity = max(activity, subagent_activity(transcript))
         rows.append(dict(
             id=p["session_id"], pane=pane_of(p), transcript=transcript,
             mtime=mtime, activity=activity, fresh=now - mtime <= max_age,
-            mid_turn=busy_from_transcript(transcript, now, max_age=None), payload=p))
+            mid_turn=mid_turn, payload=p))
 
     # One screen capture per pane that needs one: several sessions to choose
     # between, or a mid-turn session to check for a dialog.
