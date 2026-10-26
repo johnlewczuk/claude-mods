@@ -29,6 +29,9 @@ Layout (Razer Cynosa Chroma, but any keyboard with OpenRGB key names works):
   numpad 1-9,0  5-hour rate limit used %  cyan  / amber / red
   Ins..PgDn     7-day rate limit used %   violet/ amber / red
   Logo          model (Fable violet, Opus amber, Sonnet teal, Haiku green)
+  Space         permission mode of the focused session, read off its footer
+                (accept edits purple, plan teal, auto amber, bypass red;
+                manual mode dark)
   Escape        red when any limit >= 90 %
   everything else: dim base, pulsing red while an alarm is active
 
@@ -93,6 +96,37 @@ UNFOCUSED_DIM = 0.65
 # with an Enter/Esc footer. The ordinary input prompt is "❯ " + free text.
 DIALOG_RE = re.compile(r"^\s*❯\s*\d+\.\s|Enter to (confirm|select) · .*Esc to cancel", re.M)
 
+SPACE = "Key: Space"
+# The footer under the prompt names the permission mode, e.g.
+# "  ⏵⏵ bypass permissions on (shift+tab to cycle) · 1 shell". It is the
+# only real-time source: the statusline payload lacks the mode, and the
+# transcript records it only when a prompt is submitted.
+MODE_RE = re.compile(r"^\s*(?:⏵⏵|⏸)\s+(manual mode|accept edits|plan mode|auto mode|bypass permissions) on\b", re.M)
+MODE_FOOTER_LINES = 4    # the footer sits this close to the bottom of the screen
+
+
+class Mode(enum.Enum):
+    """Claude Code permission mode (values are its permissionMode names)."""
+    DEFAULT = "default"
+    ACCEPT_EDITS = "acceptEdits"
+    PLAN = "plan"
+    AUTO = "auto"
+    BYPASS = "bypassPermissions"
+
+
+MODE_FOOTERS = {"manual mode": Mode.DEFAULT, "accept edits": Mode.ACCEPT_EDITS,
+                "plan mode": Mode.PLAN, "auto mode": Mode.AUTO,
+                "bypass permissions": Mode.BYPASS}
+
+# Claude Code's own footer colours (autoAccept, planMode, warning, error);
+# manual mode leaves the spacebar dark.
+MODE_COLOURS: dict[Mode, Colour] = {
+    Mode.ACCEPT_EDITS: (110, 50, 255),
+    Mode.PLAN: (0, 140, 110),
+    Mode.AUTO: AMBER,
+    Mode.BYPASS: RED,
+}
+
 
 class State(enum.Enum):
     WORKING = "working"    # mid-turn
@@ -138,6 +172,7 @@ class Stats:
     has_session: bool = True      # False: focused pane holds no Claude session
     slots: tuple[Optional[SlotView], ...] = ()   # aligned with SLOT_KEYS
     bg: tuple[Optional[SlotView], ...] = ()      # aligned with BG_KEYS
+    mode: Optional[Mode] = None   # permission mode of the focused session
 
 
 # --- rendering ----------------------------------------------------------------
@@ -241,6 +276,8 @@ def render(names: list[str], s: Optional[Stats], t: float) -> list[Colour]:
         paint(frame, names, [key], slot_colour(view, t))
     if "Logo" in names:
         frame[names.index("Logo")] = model_colour(s.model) if s.has_session else IDLE_LOGO
+    if s.has_session and s.mode in MODE_COLOURS:
+        paint(frame, names, [SPACE], MODE_COLOURS[s.mode])
     if alarm and "Key: Escape" in names:
         frame[names.index("Key: Escape")] = RED
     return frame
@@ -291,6 +328,15 @@ def busy_from_transcript(path: Optional[str], now: Optional[float] = None,
 
 def has_dialog(screen: str) -> bool:
     return DIALOG_RE.search(screen) is not None
+
+
+def mode_from_screen(screen: str) -> Optional[Mode]:
+    """The permission mode named in the footer at the bottom of a Claude Code
+    screen, or None when no footer is visible (a dialog replaces it). Only the
+    last few lines count, so a footer quoted in the conversation is ignored."""
+    bottom = [l for l in screen.splitlines() if l.strip()][-MODE_FOOTER_LINES:]
+    found = MODE_RE.findall("\n".join(bottom))
+    return MODE_FOOTERS[found[-1]] if found else None
 
 
 # --- sessions -------------------------------------------------------------------
@@ -491,12 +537,14 @@ class LimitClock:
 def stats_from(sessions: list[Session], focus: Optional[str],
                slots: tuple[Optional[SlotView], ...] = (),
                limits: tuple[Optional[float], Optional[float]] = (None, None),
-               bg: tuple[Optional[SlotView], ...] = ()) -> Optional[Stats]:
-    """Context % and model describe the session in the focused tmux pane.
-    A focused pane with no Claude session shows none (has_session=False)
-    rather than someone else's; outside tmux (focus None) the most recently
-    active session stands in. `limits` is the account-wide (five_hour, seven_day)
-    reading, supplied by the caller's LimitClock."""
+               bg: tuple[Optional[SlotView], ...] = (),
+               mode: Optional[Mode] = None) -> Optional[Stats]:
+    """Context %, model and permission mode describe the session in the
+    focused tmux pane. A focused pane with no Claude session shows none
+    (has_session=False) rather than someone else's; outside tmux (focus None)
+    the most recently active session stands in. `limits` is the account-wide
+    (five_hour, seven_day) reading, supplied by the caller's LimitClock, and
+    `mode` the one read off the focused pane's screen."""
     live = [s for s in sessions if s.live]
     if not live:
         return None
@@ -510,7 +558,7 @@ def stats_from(sessions: list[Session], focus: Optional[str],
         ctx=(active.payload.get("context_window") or {}).get("used_percentage"),
         h5=h5, d7=d7,
         model=(active.payload.get("model") or {}).get("display_name"),
-        slots=slots, bg=bg,
+        slots=slots, bg=bg, mode=mode,
     )
 
 
@@ -784,6 +832,7 @@ def main() -> int:
     last: Optional[list[Colour]] = None
     stats, stats_at = None, -1.0
     viewed: dict[str, float] = {}       # pane -> wall time last focused
+    modes: dict[str, Mode] = {}         # pane -> last permission mode its footer showed
     limits = LimitClock()
     started = time.time()
     while True:
@@ -806,6 +855,12 @@ def main() -> int:
                 if focus:
                     viewed[focus] = wall
                 panes, pane_pids, pane_tags = live_panes()
+                # A dialog hides the footer, so keep the pane's last mode until it is back.
+                modes = {p: m for p, m in modes.items() if panes.get(p) in CLAUDE_COMMANDS}
+                if focus and panes.get(focus) in CLAUDE_COMMANDS:
+                    mode = mode_from_screen(pane_screen(focus))
+                    if mode:
+                        modes[focus] = mode
                 sessions = load_sessions(state_dir, max_age, wall, pane_screen, panes, pane_pids,
                                          pane_tags=pane_tags)
                 if slots.update(held_ids(sessions, wall, panes)):
@@ -817,7 +872,8 @@ def main() -> int:
                 write_targets(state_dir, jump_targets(sessions, slots, bgslots))
                 limits.observe(sessions, wall)
                 stats = stats_from(sessions, focus, slot_views(sessions, slots, focus, viewed, started),
-                                   limits=limits.latest(), bg=bg_views(sessions, bgslots))
+                                   limits=limits.latest(), bg=bg_views(sessions, bgslots),
+                                   mode=modes.get(focus or ""))
                 stats_at = now
             frame = render(names, stats, now)
             if frame != last:

@@ -202,6 +202,49 @@ def test_dialog_signature():
     assert not cr.has_dialog("")
 
 
+def footer(mode_line):
+    return ("● Done.\n" + "─" * 40 + "\n❯ \n" + "─" * 40 +
+            "\n  repo ▏main ▏Opus 5.5 ▏⌨3\n  " + mode_line + "\n\n\n")
+
+
+def test_mode_from_screen_reads_the_footer():
+    M = cr.Mode
+    assert cr.mode_from_screen(footer("⏸ manual mode on · ← 1 agent")) is M.DEFAULT
+    assert cr.mode_from_screen(footer("⏵⏵ accept edits on (shift+tab to cycle)")) is M.ACCEPT_EDITS
+    assert cr.mode_from_screen(footer("⏸ plan mode on (shift+tab to cycle) · ← 1 agent")) is M.PLAN
+    assert cr.mode_from_screen(footer("⏵⏵ auto mode on (shift+tab to cycle)")) is M.AUTO
+    assert cr.mode_from_screen(footer("⏵⏵ bypass permissions on · PR #227 · 1 shell")) is M.BYPASS
+
+
+def test_mode_from_screen_is_unknown_without_a_footer():
+    """A dialog replaces the footer; conversation text quoting a footer
+    higher up the screen must not count."""
+    assert cr.mode_from_screen(PERM_SCREEN) is None
+    assert cr.mode_from_screen("") is None
+    quoted = "  ⏵⏵ bypass permissions on\n" + "output\n" * 6 + PERM_SCREEN
+    assert cr.mode_from_screen(quoted) is None
+
+
+def test_space_shows_focused_session_permission_mode():
+    space = "Key: Space"
+    names = NAMES + [space]
+    lit = lambda mode, **kw: cr.render(names, stats(mode=mode, **kw), t=0.0)[names.index(space)]
+    assert lit(cr.Mode.BYPASS) == cr.MODE_COLOURS[cr.Mode.BYPASS]
+    assert lit(cr.Mode.AUTO) == cr.MODE_COLOURS[cr.Mode.AUTO]
+    assert lit(cr.Mode.PLAN) != lit(cr.Mode.ACCEPT_EDITS)
+    assert lit(cr.Mode.DEFAULT) == cr.BASE
+    assert lit(None) == cr.BASE
+    assert lit(cr.Mode.BYPASS, has_session=False) == cr.BASE
+
+
+def test_stats_from_drops_mode_when_focused_pane_has_no_session(tmp_path):
+    now = time.time()
+    write(tmp_path / "a.json", tmux_pane="%1")
+    sessions = cr.load_sessions(str(tmp_path), 30, now, lambda p: "", {"%1": "claude"})
+    assert cr.stats_from(sessions, "%1", mode=cr.Mode.PLAN).mode is cr.Mode.PLAN
+    assert cr.stats_from(sessions, "%9", mode=cr.Mode.PLAN).mode is None
+
+
 # --- sessions -------------------------------------------------------------------
 
 def write(path, transcript=None, **payload):

@@ -36,6 +36,7 @@ shortcuts (the lighting works without either).
 | numpad 1..9,0 | 5-hour rate limit used %    | cyan, amber >=70, red >=90     |
 | Ins Home PgUp Del End PgDn | 7-day rate limit used % | violet, amber >=50, red >=80 |
 | Logo          | model                       | Fable violet, Opus amber, Sonnet teal, Haiku green |
+| Space         | permission mode of the session in the focused pane | accept edits purple, plan teal, auto amber, bypass red; manual (default) off |
 | Z X C V B N M , . /  | one background session per key: detached (no tmux pane) or displaced from its pane by another session; not subagents. Ctrl+Alt+<key> brings it into view | orange breathing = working, grey = idle, off = empty |
 | Escape        | alarm (any stat >= 90 %)    | red; all other keys pulse red  |
 | rest          | idle base                   | off; faint grey = unknown      |
@@ -55,6 +56,14 @@ a Claude Code dialog shows its selected option as `❯ 1. ...` or ends with an
 at 2 Hz. Claude Code freezes the statusline while a dialog is up, so a
 blocked session's mirror file goes stale; it still counts as long as its
 tmux pane exists and shows the dialog.
+
+The permission mode is not in the statusline payload, and the transcript
+records it only when a prompt is submitted, so a Shift+Tab would not show
+until the next message. The daemon reads it off the focused pane's screen
+instead: the footer under the prompt (`⏵⏵ bypass permissions on`,
+`⏸ plan mode on`, `⏸ manual mode on`, ...), searched only in the last few
+lines so a footer quoted in the conversation does not count. A dialog hides
+the footer; the pane keeps its last mode until it returns.
 
 "Finished since you last looked" (ice blue) uses the daemon's own focus
 tracking: the pane's transcript changed after the pane was last focused.
