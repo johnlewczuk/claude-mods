@@ -1,0 +1,6 @@
+{
+  "name": "reply-timestamp",
+  "version": "0.4.0",
+  "description": "Adds the reply's time to the turn line when Claude Code leaves it off (while background agents run)",
+  "types": "./types/index.d.ts"
+}

@@ -3,6 +3,7 @@
   "owner": { "name": "John Lewczuk" },
   "plugins": [
     { "name": "path-links", "source": "./path-links" },
-    { "name": "copy-code", "source": "./copy-code" }
+    { "name": "copy-code", "source": "./copy-code" },
+    { "name": "reply-timestamp", "source": "./reply-timestamp" }
   ]
 }

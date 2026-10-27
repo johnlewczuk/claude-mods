@@ -2,7 +2,8 @@
 
 Mods and companion programs for [Claude Code](https://claude.com/claude-code).
 
-- Mods (installable plugins): [path-links](#path-links), [copy-code](#copy-code)
+- Mods (installable plugins): [path-links](#path-links), [copy-code](#copy-code),
+  [reply-timestamp](#reply-timestamp)
 - Programs: [claude-rgb](programs/claude-rgb), [statusline](programs/statusline), [vocalize](programs/vocalize)
 
 ## path-links
@@ -47,6 +48,32 @@ block's exact source on the clipboard, without the reply's indent.
 
 ```
 /plugin install copy-code --marketplace johnlewczuk/claude-mods
+```
+
+## reply-timestamp
+
+Puts the reply's time on the turn line when Claude Code leaves it off. Each
+reply normally ends with `✻ Baked for 3s · done 12:18 PM`, but a reply that
+ends while background agents or workflows still run gets
+`✻ Waiting for 2 background agents to finish` with no time. This mod draws
+that line again with the time on it, in the built-in style:
+
+```
+✻ Waiting for 2 background agents to finish · done 12:18 PM
+```
+
+- Every other turn line is drawn by Claude Code, untouched.
+- Times read as the built-in ones do: `12:18 PM` today, `Monday 12:18 PM`
+  this week, `Monday, Oct 20, 12:18 PM` before that.
+- Interrupted turns have no turn line to put a time on, and a line written
+  only after team tasks finish keeps the time it was written.
+- Only replies made while the mod is loaded have a recorded time; older
+  waiting lines (a resumed session) stay as Claude Code draws them.
+
+### Install
+
+```
+/plugin install reply-timestamp --marketplace johnlewczuk/claude-mods
 ```
 
 ## Programs
