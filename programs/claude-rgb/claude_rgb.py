@@ -89,6 +89,9 @@ SLOT_GRACE = 60          # a slot outlives its session's last statusline write b
 # tmux's #{pane_current_command} while Claude Code runs in the pane. Tool
 # subprocesses never take the tty foreground, so this holds mid-turn too.
 CLAUDE_COMMANDS = {"claude", "node"}
+# Teammates are launched by the path of the versioned binary, so tmux reports
+# the version (e.g. "2.1.319") as their command.
+VERSIONED_BINARY_RE = re.compile(r"\d+\.\d+\.\d+")
 UNFOCUSED_DIM = 0.65
 
 # A Claude Code dialog (permission, AskUserQuestion, plan approval, folder
@@ -381,8 +384,10 @@ def resolve_pane(pid: Optional[int], pane_pids: Mapping[int, str],
 
 def is_agent(payload: dict) -> bool:
     """Background subagents run inside the parent's process with their own
-    session id; they must not claim the parent's pane."""
-    return bool(payload.get("agent_type") or payload.get("agent"))
+    session id; they must not claim the parent's pane. A teammate's payload
+    names an agent too, but the hook saw TMUX_PANE: it is a separate process
+    with a pane of its own, so an ordinary session."""
+    return not payload.get("tmux_pane") and bool(payload.get("agent_type") or payload.get("agent"))
 
 
 @dataclass(frozen=True)
@@ -793,7 +798,7 @@ def parse_panes(out: str) -> tuple[dict[str, str], dict[int, str], dict[str, str
     for line in out.splitlines():
         parts = line.split("\t", 3)
         if len(parts) == 4 and parts[1].isdigit():
-            cmds[parts[0]] = parts[3]
+            cmds[parts[0]] = "claude" if VERSIONED_BINARY_RE.fullmatch(parts[3]) else parts[3]
             pids[int(parts[1])] = parts[0]
             if parts[2]:
                 tags[parts[0]] = parts[2]

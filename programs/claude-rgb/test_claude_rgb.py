@@ -637,6 +637,27 @@ def test_forks_and_subagents_are_placed_by_pid_not_env(tmp_path):
     assert cr.held_ids(list(ss.values()), now, panes) == ["fork"]
 
 
+def test_teammate_with_its_own_pane_is_an_ordinary_session(tmp_path):
+    """A teammate's payload names an agent like a subagent's does, but it is
+    a separate process in its own pane, and the hook saw that pane."""
+    now = time.time()
+    t = tmp_path / "t.jsonl"; t.write_text(jl(ASSIST_END, TURN_DONE))
+    write(tmp_path / "mate.json", t, tmux_pane="%9", claude_pid=900, agent_type="general-purpose",
+          agent={"name": "general-purpose"}, context_window={"used_percentage": 7})
+    panes = {"%9": "claude"}
+    s = cr.load_sessions(str(tmp_path), 30, now, lambda p: "", panes)[0]
+    assert s.pane == "%9" and s.live and not s.agent
+    assert cr.held_ids([s], now, panes) == ["mate"]
+    assert cr.pick_stats(str(tmp_path), max_age=30, now=now, focus="%9", live_panes=panes).ctx == 7
+
+
+def test_parse_panes_counts_a_versioned_binary_as_claude():
+    """Teammates are launched by the path of the versioned binary, so tmux
+    reports the version as the pane's command."""
+    cmds, _, _ = cr.parse_panes("%1\t100\t\t2.1.319\n%2\t200\t\tpython3.12\n")
+    assert cmds == {"%1": "claude", "%2": "python3.12"}
+
+
 # --- which session a pane displays ------------------------------------------------
 
 def cand(id, name=None, fresh=True, tagged=False, mid_turn=False, mtime=100.0):

@@ -94,7 +94,10 @@ goes quiet; a session whose pane is gone or no longer runs claude is
 released at once. Subagents and forks run the statusline too, with their
 own session id and no tmux pane: they feed the rate-limit bars but get no
 slot, since there is nothing to jump to. A fork shown in a pane takes the
-pane over from its paused parent (newest file wins) and gets a slot. A 13th session gets no slot
+pane over from its paused parent (newest file wins) and gets a slot. An
+agent-team teammate is a separate process in its own pane, so it is an
+ordinary session with a slot; tmux reports its command as the version of the
+binary (`2.1.319`), which counts as `claude`. A 13th session gets no slot
 until one frees. Each session's statusline shows its key as `⌨3`; the daemon
 writes `$XDG_RUNTIME_DIR/claude-rgb/slots/<session_id>` for that.
 
