@@ -1,10 +1,14 @@
-# claude-mods
+# claude-code-config
 
-Mods and companion programs for [Claude Code](https://claude.com/claude-code).
+My [Claude Code](https://claude.com/claude-code) setup: mods, companion
+programs, skills and global instructions.
 
 - Mods (installable plugins): [path-links](#path-links), [copy-code](#copy-code),
   [reply-timestamp](#reply-timestamp)
 - Programs: [claude-rgb](programs/claude-rgb), [statusline](programs/statusline), [vocalize](programs/vocalize)
+- Skills: [review-until-clean](skills/review-until-clean), [prepare-pr](skills/prepare-pr),
+  [review-retro](skills/review-retro), tested by [evals](evals)
+- Global instructions: [CLAUDE.md](#global-claudemd)
 
 ## path-links
 
@@ -20,7 +24,7 @@ on Linux).
 ### Install
 
 ```
-/plugin install path-links --marketplace johnlewczuk/claude-mods
+/plugin install path-links --marketplace johnlewczuk/claude-code-config
 ```
 
 ### tmux
@@ -47,7 +51,7 @@ block's exact source on the clipboard, without the reply's indent.
 ### Install
 
 ```
-/plugin install copy-code --marketplace johnlewczuk/claude-mods
+/plugin install copy-code --marketplace johnlewczuk/claude-code-config
 ```
 
 ## reply-timestamp
@@ -73,7 +77,7 @@ that line again with the time on it, in the built-in style:
 ### Install
 
 ```
-/plugin install reply-timestamp --marketplace johnlewczuk/claude-mods
+/plugin install reply-timestamp --marketplace johnlewczuk/claude-code-config
 ```
 
 ## Programs
@@ -87,3 +91,16 @@ has its own notes.
   script, which also feeds claude-rgb.
 - [`programs/vocalize`](programs/vocalize): speaks a short message aloud when
   Claude needs a physical action, plus the skill that tells Claude when.
+
+## Global CLAUDE.md
+
+[`claude-md/CLAUDE.md`](claude-md/CLAUDE.md) is my `~/.claude/CLAUDE.md`,
+the instructions Claude Code loads in every project. Link it into place:
+
+```
+ln -s "$PWD/claude-md/CLAUDE.md" ~/.claude/CLAUDE.md
+```
+
+Notes about my own machine and work repositories stay out of this repo. The
+file pulls them in with `@~/.claude/CLAUDE.private.md`. Make that file for
+your own notes, or delete the line.
