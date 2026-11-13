@@ -1,0 +1,5 @@
+# finding  acceptable actions   ~regex the transcript must contain (method check)
+F1.1 ESCALATE
+F1.2 AUTO-FIX DECIDE ~rm --cached
+F1.3 AUTO-FIX
+F1.4 AUTO-FIX

@@ -1,0 +1,9 @@
+# finding  acceptable actions (first = expected)
+F1.1 AUTO-FIX
+F1.2 AUTO-FIX
+F1.3 DECIDE AUTO-FIX
+F1.4 ESCALATE
+F1.5 NOTE
+F1.6 NOTE
+F1.7 AUTO-FIX
+F1.8 SKIP
